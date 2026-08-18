@@ -4,8 +4,8 @@ Job Harvester will be a small, local-first CLI that collects public job offers,
 normalizes them, stores them in SQLite, and reports newly discovered listings.
 It will not require Career-Ops or any hosted service.
 
-> Status: V4 implemented with Greenhouse, Lever, and France Travail collection
-> through one normalized, deterministic pipeline.
+> Status: V5 implemented with a persistent Greenhouse/Lever board registry,
+> deterministic URL discovery, and three-source collection through one pipeline.
 
 ## Daily workflow
 
@@ -129,7 +129,7 @@ then by external ID. Each object has this stable, intentionally flat shape:
 
 Timestamps are ISO 8601 strings in UTC when present. The array can be consumed
 directly by Codex or another downstream tool; no Career-Ops integration is
-performed in V4.
+performed in V5.
 
 ## Collection
 
@@ -141,8 +141,8 @@ atomically.
 cp config.example.toml config.toml
 # Set real company names and public board identifiers in config.toml.
 job-harvester collect --config config.toml --database jobs.sqlite3
-Greenhouse: Found 42; 42 new; 0 updated.
-Lever: Found 18; 18 new; 0 updated.
+Greenhouse: 2 boards; Found 42; 42 new; 0 updated.
+Lever: 2 boards; Found 18; 18 new; 0 updated.
 France Travail: Found 120; 110 new; 4 updated.
 Total: Found 180; 170 new; 4 updated.
 ```
@@ -150,6 +150,53 @@ Total: Found 180; 170 new; 4 updated.
 Running the same command again keeps the existing rows and should report zero
 new jobs when the board has not changed. Network or configuration failures must
 produce a non-zero exit status and must not discard previously collected jobs.
+
+## Board registry and discovery
+
+Greenhouse and Lever boards can be stored in the same SQLite database as jobs,
+so a large board set does not need to live in TOML. Registry rows track provider,
+slug, optional company name, enabled state, discovery/check timestamps,
+validation status, and provenance.
+
+```console
+job-harvester boards add greenhouse cloudflare --company Cloudflare
+job-harvester boards add lever voltus --company Voltus
+job-harvester boards list
+job-harvester boards validate
+job-harvester boards disable lever voltus
+job-harvester boards enable lever voltus
+```
+
+All board commands default to `jobs.sqlite3`. Put `--database PATH` immediately
+after `boards` to use another database. New boards start as `unknown`; collection
+uses only registry boards that are both enabled and `valid`. Validation calls the
+official public list API once per board. An empty job array is valid, HTTP 404 is
+invalid, and temporary HTTP/network/JSON failures update `last_checked_at` without
+overwriting the previous validation status.
+
+Discovery imports candidate ATS URLs from UTF-8 text or JSON. JSON may contain
+URLs at any nesting level. Supported patterns are:
+
+- `boards.greenhouse.io/<slug>`
+- `job-boards.greenhouse.io/<slug>`
+- `jobs.lever.co/<slug>`
+
+```console
+job-harvester boards discover --input candidate-urls.txt
+job-harvester boards validate
+```
+
+Candidates are normalized, deduplicated, and stored as `unknown` until validated.
+A practical workflow is to save search-result URLs or known ATS career URLs into
+a text/JSON file and import it. V5 deliberately does not query search engines,
+automate a browser, crawl arbitrary company sites, or infer an ATS from a generic
+company domain; generic domains should first be resolved manually to an ATS URL.
+
+Existing TOML Greenhouse and Lever entries remain supported. During collection,
+TOML and registry boards are deduplicated case-insensitively by `(provider, slug)`;
+the TOML entry and its company display name win. France Travail remains configured
+only through TOML and environment credentials. A filters-only TOML file is valid
+when all Greenhouse/Lever boards come from the registry.
 
 ## Install and run
 
@@ -178,9 +225,12 @@ job-harvester/
 ├── config.example.toml
 ├── src/job_harvester/
 │   ├── cli.py             # argument parsing and run summary
+│   ├── board_validation.py # official API board validation
 │   ├── config.py          # TOML loading and validation
+│   ├── discovery.py       # candidate URL extraction/import
 │   ├── filters.py         # deterministic relevance matching
 │   ├── models.py          # normalized Job value object
+│   ├── registry.py        # persistent board registry
 │   ├── storage.py         # SQLite schema and upserts
 │   └── collectors/
 │       ├── base.py        # small Collector protocol
@@ -305,6 +355,18 @@ access tokens must not be committed; credentials do not belong in TOML.
 - Lever and Greenhouse IDs may match safely because identity remains
   `UNIQUE(source, external_id)`.
 
+## Board registry assumptions and risks
+
+- The registry is an additive `boards` table in the job database with
+  `UNIQUE(provider, slug)`. Existing databases require no destructive migration.
+- Greenhouse validation uses its unauthenticated official Job Board API; Lever
+  validation uses its public Postings API. Valid-empty boards remain valid.
+- Discovery only identifies candidates. It never marks a board valid and never
+  scrapes career-page HTML.
+- Registry validation metadata may commit independently because it does not alter
+  job collection state. `collect` still fetches every source before the atomic
+  job-state rollover/upsert transaction.
+
 ## France Travail assumptions and risks
 
 - V4 uses only the official authenticated API at
@@ -323,6 +385,6 @@ access tokens must not be committed; credentials do not belong in TOML.
   other source failure occurs before SQLite opens and aborts the entire atomic
   collection run.
 
-V4 intentionally does not add other sources, scraping, lifecycle/closure
+V5 intentionally does not add other sources, scraping, lifecycle/closure
 tracking, scoring, an LLM, a web interface, scheduling, Docker, or Career-Ops
 integration.

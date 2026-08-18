@@ -7,8 +7,10 @@ import unittest
 from unittest.mock import patch
 
 from job_harvester import cli
+from job_harvester.board_validation import ValidationResult
 from job_harvester.collectors.greenhouse import CollectionError
 from job_harvester.models import Job
+from job_harvester.registry import BoardRegistry
 from job_harvester.storage import JobStore
 
 
@@ -37,9 +39,9 @@ class CliTests(unittest.TestCase):
                 self.assertEqual(cli.main(arguments), 0)
         self.assertEqual(
             output.getvalue(),
-            "Greenhouse: Found 1; 1 new; 0 updated.\n"
+            "Greenhouse: 1 boards; Found 1; 1 new; 0 updated.\n"
             "Total: Found 1; 1 new; 0 updated.\n"
-            "Greenhouse: Found 1; 0 new; 0 updated.\n"
+            "Greenhouse: 1 boards; Found 1; 0 new; 0 updated.\n"
             "Total: Found 1; 0 new; 0 updated.\n",
         )
 
@@ -58,8 +60,8 @@ class CliTests(unittest.TestCase):
             self.assertEqual(cli.main(arguments), 0)
         with JobStore(self.database) as store:
             self.assertEqual(len(store.list_jobs()), 2)
-        self.assertIn("Greenhouse: Found 1; 1 new; 0 updated.", output.getvalue())
-        self.assertIn("Lever: Found 1; 1 new; 0 updated.", output.getvalue())
+        self.assertIn("Greenhouse: 1 boards; Found 1; 1 new; 0 updated.", output.getvalue())
+        self.assertIn("Lever: 1 boards; Found 1; 1 new; 0 updated.", output.getvalue())
         self.assertIn("Total: Found 2; 2 new; 0 updated.", output.getvalue())
 
     def test_collects_all_three_sources_and_reports_france_travail(self) -> None:
@@ -210,3 +212,59 @@ class CliTests(unittest.TestCase):
         self.assertEqual([record.job.work_mode for record in records], [
             "remote", "hybrid", "unknown", "onsite"
         ])
+
+    def test_board_commands_add_list_toggle_discover_and_validate(self) -> None:
+        output = io.StringIO()
+        base = ["boards", "--database", str(self.database)]
+        with redirect_stdout(output):
+            self.assertEqual(cli.main(base + [
+                "add", "greenhouse", "Acme", "--company", "Acme Inc."
+            ]), 0)
+            self.assertEqual(cli.main(base + ["disable", "greenhouse", "acme"]), 0)
+            self.assertEqual(cli.main(base + ["enable", "greenhouse", "acme"]), 0)
+            self.assertEqual(cli.main(base + ["list"]), 0)
+        self.assertIn("greenhouse | acme | Acme Inc. | enabled | unknown", output.getvalue())
+
+        candidates = self.directory / "candidates.txt"
+        candidates.write_text("https://jobs.lever.co/other/jobs/123\n")
+        with redirect_stdout(output):
+            self.assertEqual(cli.main(base + ["discover", "--input", str(candidates)]), 0)
+        with patch.object(
+            cli.BoardValidator,
+            "validate",
+            return_value=ValidationResult("valid", job_count=0),
+        ), redirect_stdout(output):
+            self.assertEqual(cli.main(base + ["validate"]), 0)
+        with BoardRegistry(self.database) as registry:
+            statuses = {
+                (board.provider, board.slug): board.validation_status
+                for board in registry.list()
+            }
+        self.assertEqual(statuses, {
+            ("greenhouse", "acme"): "valid",
+            ("lever", "other"): "valid",
+        })
+
+    def test_toml_board_wins_over_duplicate_registry_board(self) -> None:
+        with BoardRegistry(self.database) as registry:
+            registry.add("greenhouse", "ACME", company="Registry Company")
+            registry.record_validation("greenhouse", "acme", "valid")
+        job = Job("greenhouse", "1", "Acme", "Engineer", "Paris", "https://job")
+        arguments = ["collect", "--config", str(self.config), "--database", str(self.database)]
+        with patch.object(cli, "GreenhouseCollector") as collector:
+            collector.return_value.collect.return_value = [job]
+            self.assertEqual(cli.main(arguments), 0)
+        collector.assert_called_once_with("Acme", "acme")
+        collector.return_value.collect.assert_called_once_with()
+
+    def test_registry_only_valid_boards_are_collected(self) -> None:
+        self.config.write_text('[filters]\npositive_title_keywords = ["platform"]\n')
+        with BoardRegistry(self.database) as registry:
+            registry.add("lever", "valid", company="Valid Co")
+            registry.record_validation("lever", "valid", "valid")
+            registry.add("lever", "unknown", company="Unknown Co")
+        job = Job("lever", "1", "Valid Co", "Platform", "Remote", "https://job")
+        arguments = ["collect", "--config", str(self.config), "--database", str(self.database)]
+        with patch.object(cli.LeverCollector, "collect", return_value=[job]) as collect:
+            self.assertEqual(cli.main(arguments), 0)
+        self.assertEqual(collect.call_count, 1)

@@ -5,6 +5,7 @@ import sqlite3
 import sys
 from collections.abc import Sequence
 
+from job_harvester.board_validation import BoardValidator
 from job_harvester.collectors.base import CollectionError
 from job_harvester.collectors.france_travail import FranceTravailCollector
 from job_harvester.collectors.greenhouse import GreenhouseCollector
@@ -13,10 +14,13 @@ from job_harvester.config import (
     ConfigError,
     FranceTravailSource,
     GreenhouseSource,
+    LeverSource,
     load_config,
 )
+from job_harvester.discovery import DiscoveryError, discover_boards
 from job_harvester.filters import is_relevant
 from job_harvester.models import StoredJob
+from job_harvester.registry import BoardRegistry, RegistryError
 from job_harvester.storage import JobStore
 
 
@@ -38,6 +42,24 @@ def build_parser() -> argparse.ArgumentParser:
     export.add_argument("--database", type=Path, default=Path("jobs.sqlite3"))
     export.add_argument("--new-only", action="store_true")
     export.add_argument("--output", type=Path, help="write JSON to a file instead of stdout")
+    boards = subparsers.add_parser("boards", help="manage Greenhouse and Lever boards")
+    boards.add_argument("--database", type=Path, default=Path("jobs.sqlite3"))
+    board_commands = boards.add_subparsers(dest="boards_command", required=True)
+    board_commands.add_parser("list", help="list registered boards")
+    add = board_commands.add_parser("add", help="add a board manually")
+    add.add_argument("provider", choices=("greenhouse", "lever"))
+    add.add_argument("slug")
+    add.add_argument("--company")
+    add.add_argument("--provenance", default="manual")
+    for action in ("enable", "disable"):
+        command = board_commands.add_parser(action, help=f"{action} a board")
+        command.add_argument("provider", choices=("greenhouse", "lever"))
+        command.add_argument("slug")
+    validate = board_commands.add_parser("validate", help="validate registered boards")
+    validate.add_argument("provider", nargs="?", choices=("greenhouse", "lever"))
+    validate.add_argument("slug", nargs="?")
+    discover = board_commands.add_parser("discover", help="import candidate board URLs")
+    discover.add_argument("--input", type=Path, required=True)
     return parser
 
 
@@ -49,15 +71,41 @@ def run_collect(config_path: Path, database_path: Path) -> int:
         "france_travail": [],
     }
     configured_source_types: set[str] = set()
+    greenhouse_sources: dict[str, GreenhouseSource] = {}
+    lever_sources: dict[str, LeverSource] = {}
     for source in config.sources:
         configured_source_types.add(source.type)
         if isinstance(source, GreenhouseSource):
-            collected = GreenhouseCollector(source.company, source.board_token).collect()
+            greenhouse_sources.setdefault(source.board_token.casefold(), source)
         elif isinstance(source, FranceTravailSource):
             collected = FranceTravailCollector(source.search_terms).collect()
+            jobs_by_source[source.type].extend(collected)
         else:
-            collected = LeverCollector(source.company, source.company_slug).collect()
-        jobs_by_source[source.type].extend(collected)
+            lever_sources.setdefault(source.company_slug.casefold(), source)
+
+    if database_path.exists():
+        with BoardRegistry(database_path) as registry:
+            registered = registry.list(enabled_only=True, valid_only=True)
+        for board in registered:
+            configured_source_types.add(board.provider)
+            company = board.company or board.slug
+            if board.provider == "greenhouse":
+                greenhouse_sources.setdefault(
+                    board.slug.casefold(), GreenhouseSource(company, board.slug)
+                )
+            else:
+                lever_sources.setdefault(
+                    board.slug.casefold(), LeverSource(company, board.slug)
+                )
+
+    for source in greenhouse_sources.values():
+        jobs_by_source["greenhouse"].extend(
+            GreenhouseCollector(source.company, source.board_token).collect()
+        )
+    for source in lever_sources.values():
+        jobs_by_source["lever"].extend(
+            LeverCollector(source.company, source.company_slug).collect()
+        )
     jobs = [job for source_jobs in jobs_by_source.values() for job in source_jobs]
     with JobStore(database_path) as store:
         result = store.upsert(jobs)
@@ -71,12 +119,92 @@ def run_collect(config_path: Path, database_path: Path) -> int:
         unique_jobs = {(job.source, job.external_id) for job in source_jobs}
         new = sum(states[identity] == "new" for identity in unique_jobs)
         updated = sum(states[identity] == "updated" for identity in unique_jobs)
+        label = source_type.replace("_", " ").title()
+        board_count = ""
+        if source_type == "greenhouse":
+            board_count = f"{len(greenhouse_sources)} boards; "
+        elif source_type == "lever":
+            board_count = f"{len(lever_sources)} boards; "
         print(
-            f"{source_type.replace('_', ' ').title()}: Found {len(source_jobs)}; "
+            f"{label}: {board_count}Found {len(source_jobs)}; "
             f"{new} new; {updated} updated."
         )
     print(f"Total: Found {len(jobs)}; {result.new} new; {result.updated} updated.")
     return 0
+
+
+def run_boards(args: argparse.Namespace) -> int:
+    with BoardRegistry(args.database) as registry:
+        if args.boards_command == "list":
+            boards = registry.list()
+            for board in boards:
+                company = board.company or "—"
+                enabled = "enabled" if board.enabled else "disabled"
+                print(
+                    f"{board.provider} | {board.slug} | {company} | "
+                    f"{enabled} | {board.validation_status}"
+                )
+            print(f"{len(boards)} board(s).")
+            return 0
+        if args.boards_command == "add":
+            created = registry.add(
+                args.provider,
+                args.slug,
+                company=args.company,
+                provenance=args.provenance,
+            )
+            action = "Added" if created else "Already registered"
+            print(f"{action}: {args.provider}/{args.slug.casefold()}")
+            return 0
+        if args.boards_command in {"enable", "disable"}:
+            enabled = args.boards_command == "enable"
+            registry.set_enabled(args.provider, args.slug, enabled)
+            print(f"{args.boards_command.title()}d: {args.provider}/{args.slug.casefold()}")
+            return 0
+        if args.boards_command == "discover":
+            discovered = discover_boards(args.input)
+            added = sum(
+                registry.add(
+                    provider,
+                    slug,
+                    provenance=f"import:{args.input.name}",
+                )
+                for provider, slug in discovered
+            )
+            print(f"Discovered {len(discovered)} candidate board(s); {added} added.")
+            return 0
+        if args.boards_command == "validate":
+            if (args.provider is None) != (args.slug is None):
+                raise RegistryError("validate requires both provider and slug, or neither")
+            if args.provider is None:
+                boards = registry.list()
+            else:
+                board = registry.get(args.provider, args.slug)
+                if board is None:
+                    raise RegistryError(f"board not found: {args.provider}/{args.slug}")
+                boards = [board]
+            validator = BoardValidator()
+            temporary = False
+            for board in boards:
+                result = validator.validate(board)
+                if result.outcome == "temporary":
+                    registry.record_validation(board.provider, board.slug, None)
+                    temporary = True
+                else:
+                    registry.record_validation(
+                        board.provider,
+                        board.slug,
+                        result.outcome,
+                        company=result.company,
+                    )
+                detail = (
+                    f"{result.job_count} job(s)"
+                    if result.job_count is not None
+                    else result.error or ""
+                )
+                print(f"{board.provider}/{board.slug}: {result.outcome} {detail}".rstrip())
+            return 1 if temporary else 0
+    return 2
 
 
 def relevant_jobs(
@@ -158,7 +286,16 @@ def main(argv: Sequence[str] | None = None) -> int:
                 new_only=args.new_only,
                 output_path=args.output,
             )
-    except (ConfigError, CollectionError, sqlite3.Error, OSError) as error:
+        if args.command == "boards":
+            return run_boards(args)
+    except (
+        ConfigError,
+        CollectionError,
+        DiscoveryError,
+        RegistryError,
+        sqlite3.Error,
+        OSError,
+    ) as error:
         print(f"error: {error}", file=sys.stderr)
         return 1
     return 2

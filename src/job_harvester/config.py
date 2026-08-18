@@ -95,9 +95,9 @@ def load_config(path: str | Path) -> Config:
     except (OSError, tomllib.TOMLDecodeError) as error:
         raise ConfigError(f"could not read configuration {config_path}: {error}") from error
 
-    raw_sources = document.get("sources")
-    if not isinstance(raw_sources, list) or not raw_sources:
-        raise ConfigError("configuration must contain at least one [[sources]] entry")
+    raw_sources = document.get("sources", [])
+    if not isinstance(raw_sources, list):
+        raise ConfigError("sources must be an array of tables")
 
     sources: list[GreenhouseSource | LeverSource | FranceTravailSource] = []
     for index, raw in enumerate(raw_sources):

@@ -63,7 +63,6 @@ class ConfigTests(unittest.TestCase):
 
     def test_rejects_invalid_configuration(self) -> None:
         cases = [
-            ("", "at least one"),
             ('[[sources]]\ntype = "lever"\ncompany = "Acme"\n', "company_slug"),
             ('[[sources]]\ntype = "france_travail"\n', "search_terms"),
             ('[[sources]]\ntype = "other"\ncompany = "Acme"\n', "unsupported"),
@@ -94,3 +93,9 @@ class ConfigTests(unittest.TestCase):
     def test_reports_missing_configuration(self) -> None:
         with self.assertRaisesRegex(ConfigError, "not found"):
             load_config(self.directory / "missing.toml")
+
+    def test_allows_registry_only_configuration(self) -> None:
+        path = self.directory / "config.toml"
+        path.write_text('[filters]\npositive_title_keywords = ["platform"]\n')
+        config = load_config(path)
+        self.assertEqual(config.sources, ())
