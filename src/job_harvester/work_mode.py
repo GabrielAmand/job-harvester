@@ -25,6 +25,13 @@ def _plain(value: str) -> str:
     return re.sub(r"\s+", " ", text.casefold()).strip()
 
 
+def description_text(value: str) -> str:
+    """Return compact readable text without retaining source HTML."""
+    parser = _TextExtractor()
+    parser.feed(unescape(value))
+    return re.sub(r"\s+", " ", " ".join(parser.parts)).strip()
+
+
 REMOTE = re.compile(
     r"\b(?:fully remote|full remote|remote[- ]first|work(?:ing)? from home|wfh|"
     r"home[- ]based|distributed|work from anywhere|100 ?% (?:remote|teletravail)|"

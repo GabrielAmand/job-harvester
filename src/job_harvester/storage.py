@@ -26,6 +26,8 @@ CREATE TABLE IF NOT EXISTS jobs (
     source_key TEXT,
     full_remote INTEGER NOT NULL DEFAULT 0,
     remote_eligibility TEXT NOT NULL DEFAULT 'unknown',
+    description TEXT,
+    canonical_url TEXT,
     UNIQUE (source, external_id)
 )
 """
@@ -78,6 +80,10 @@ class JobStore(AbstractContextManager["JobStore"]):
             self.connection.execute(
                 "ALTER TABLE jobs ADD COLUMN remote_eligibility TEXT NOT NULL DEFAULT 'unknown'"
             )
+        if "description" not in columns:
+            self.connection.execute("ALTER TABLE jobs ADD COLUMN description TEXT")
+        if "canonical_url" not in columns:
+            self.connection.execute("ALTER TABLE jobs ADD COLUMN canonical_url TEXT")
         self.connection.commit()
 
     def close(self) -> None:
@@ -95,7 +101,7 @@ class JobStore(AbstractContextManager["JobStore"]):
                 existing = self.connection.execute(
                     """
                     SELECT company, title, location, work_mode, remote_scope,
-                           published_at, url, full_remote, remote_eligibility
+                           published_at, url, full_remote, remote_eligibility, description
                     FROM jobs WHERE source = ? AND external_id = ?
                     """,
                     (job.source, job.external_id),
@@ -111,6 +117,7 @@ class JobStore(AbstractContextManager["JobStore"]):
                     job.url,
                     int(job.full_remote),
                     job.remote_eligibility,
+                    job.description,
                 )
                 if existing is None:
                     state = "new"
@@ -125,8 +132,8 @@ class JobStore(AbstractContextManager["JobStore"]):
                     INSERT INTO jobs (
                         source, external_id, company, title, location,
                         work_mode, remote_scope, published_at, url, collected_at, state,
-                        source_key, full_remote, remote_eligibility
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        source_key, full_remote, remote_eligibility, description
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     ON CONFLICT(source, external_id) DO UPDATE SET
                         company = excluded.company,
                         title = excluded.title,
@@ -138,7 +145,8 @@ class JobStore(AbstractContextManager["JobStore"]):
                         state = excluded.state,
                         source_key = COALESCE(excluded.source_key, jobs.source_key),
                         full_remote = excluded.full_remote,
-                        remote_eligibility = excluded.remote_eligibility
+                        remote_eligibility = excluded.remote_eligibility,
+                        description = excluded.description
                     """,
                     (
                         job.source,
@@ -155,6 +163,7 @@ class JobStore(AbstractContextManager["JobStore"]):
                         job.source_key,
                         int(job.full_remote),
                         job.remote_eligibility,
+                        job.description,
                     ),
                 )
         return CollectionResult(new=new_count, updated=updated_count)
@@ -165,7 +174,7 @@ class JobStore(AbstractContextManager["JobStore"]):
             f"""
             SELECT source, external_id, company, title, location, url,
                    work_mode, remote_scope, published_at, collected_at, state,
-                   source_key, full_remote, remote_eligibility
+                   source_key, full_remote, remote_eligibility, description
             FROM jobs
             {where}
             ORDER BY company COLLATE NOCASE, title COLLATE NOCASE, external_id
@@ -187,6 +196,7 @@ class JobStore(AbstractContextManager["JobStore"]):
                     source_key=row[11],
                     full_remote=bool(row[12]),
                     remote_eligibility=row[13],
+                    description=row[14],
                 ),
                 state=row[10],
             )

@@ -5,9 +5,24 @@ normalizes them, stores them in SQLite, and reports newly discovered listings.
 Collection does not require Career-Ops or any hosted service. Evaluation and
 application-artifact preparation can optionally use a local Career-Ops checkout.
 
-> Status: V10 implemented with an interactive, human-controlled application
+> Status: V10.1 implemented with URL-only manual job import and an interactive,
+> human-controlled application
 > session. Gmail ingestion remains read-only; Job Harvester never submits forms
 > or sends email.
+
+Import a job found elsewhere using only its public URL:
+
+```console
+job-harvester job import https://example.com/job/123 --database jobs.sqlite3
+```
+
+Greenhouse, Lever, and France Travail links retain their native source identity
+and use the supported API. Other pages are imported as `manual` from structured
+JobPosting data and conservative metadata fallbacks. If title or company alone
+cannot be established, an interactive terminal asks only for those missing
+identity fields; non-interactive use fails clearly. Imported jobs are ordinary
+pending jobs and enter the existing `batch start` workflow. Re-importing the
+same canonical URL reports the existing job ID.
 
 ## Collection workflow
 

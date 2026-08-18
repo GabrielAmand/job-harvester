@@ -6,7 +6,7 @@ from urllib.request import Request, urlopen
 
 from job_harvester.collectors.base import CollectionError, Opener
 from job_harvester.models import Job
-from job_harvester.work_mode import classify_work_mode
+from job_harvester.work_mode import classify_work_mode, description_text
 
 
 class GreenhouseCollector:
@@ -84,4 +84,9 @@ class GreenhouseCollector:
             full_remote=full_remote,
             remote_eligibility=remote_eligibility,
             source_key=self.board_token,
+            description=(
+                description_text(raw["content"])
+                if isinstance(raw.get("content"), str) and raw["content"].strip()
+                else None
+            ),
         )

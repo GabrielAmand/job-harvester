@@ -21,6 +21,7 @@ class Job:
     source_key: str | None = None
     full_remote: bool = False
     remote_eligibility: str = "unknown"
+    description: str | None = None
 
     def discovered_at(self) -> datetime:
         return self.collected_at or utc_now()

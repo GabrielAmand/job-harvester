@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "job-harvester"
-version = "0.10.0"
+version = "0.10.1"
 description = "Collect public job listings into a local SQLite database"
 readme = "README.md"
 requires-python = ">=3.11"

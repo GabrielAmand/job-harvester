@@ -9,7 +9,7 @@ from urllib.request import Request, urlopen
 
 from job_harvester.collectors.base import CollectionError, Opener
 from job_harvester.models import Job
-from job_harvester.work_mode import classify_france_travail_work_mode
+from job_harvester.work_mode import classify_france_travail_work_mode, description_text
 
 
 TOKEN_URL = "https://entreprise.francetravail.fr/connexion/oauth2/access_token?realm=%2Fpartenaire"
@@ -201,6 +201,11 @@ class FranceTravailCollector:
             remote_scope=remote_scope,
             full_remote=full_remote,
             remote_eligibility=remote_eligibility,
+            description=(
+                description_text(raw["description"])
+                if isinstance(raw.get("description"), str) and raw["description"].strip()
+                else None
+            ),
         )
 
     @staticmethod

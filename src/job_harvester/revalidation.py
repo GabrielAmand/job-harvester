@@ -28,6 +28,8 @@ class JobRevalidator:
         self._france_travail_token: str | None = None
 
     def is_active(self, job: Job) -> bool:
+        if job.source == "manual":
+            return self._get_manual(job)
         if job.source == "greenhouse":
             if not job.source_key:
                 raise RevalidationError(
@@ -57,6 +59,31 @@ class JobRevalidator:
                 authorization=f"Bearer {token}",
             )
         raise RevalidationError(f"unsupported job source: {job.source}")
+
+    def _get_manual(self, job: Job) -> bool:
+        request = Request(
+            job.url,
+            headers={
+                "Accept": "text/html,application/xhtml+xml",
+                "User-Agent": "job-harvester/0.10.1",
+            },
+        )
+        try:
+            with self.opener(request, timeout=self.timeout) as response:
+                # A successful fetch is deliberately sufficient. Ambiguous page copy
+                # must never expire a manually imported opportunity.
+                response.read(1024)
+                return True
+        except HTTPError as error:
+            if error.code in {404, 410}:
+                return False
+            raise RevalidationError(
+                f"manual job {job.external_id} returned HTTP {error.code}"
+            ) from error
+        except (URLError, TimeoutError, OSError) as error:
+            raise RevalidationError(
+                f"manual job {job.external_id} failed: {error}"
+            ) from error
 
     def _authenticate_france_travail(self) -> str:
         try:

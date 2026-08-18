@@ -6,7 +6,7 @@ from urllib.request import Request, urlopen
 
 from job_harvester.collectors.base import CollectionError, Opener
 from job_harvester.models import Job
-from job_harvester.work_mode import classify_lever_work_mode
+from job_harvester.work_mode import classify_lever_work_mode, description_text
 
 
 class LeverCollector:
@@ -87,4 +87,10 @@ class LeverCollector:
             full_remote=full_remote,
             remote_eligibility=remote_eligibility,
             source_key=self.company_slug,
+            description=(
+                description_text(raw["descriptionPlain"])
+                if isinstance(raw.get("descriptionPlain"), str)
+                and raw["descriptionPlain"].strip()
+                else None
+            ),
         )

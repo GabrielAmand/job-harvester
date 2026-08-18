@@ -39,6 +39,7 @@ from job_harvester.revalidation import RevalidationError
 from job_harvester.storage import JobStore
 from job_harvester.gmail import authorize as gmail_authorize, status as gmail_status, sync as gmail_sync
 from job_harvester.mail import MailError, MailStore
+from job_harvester.job_import import JobImportError, JobImporter
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -93,7 +94,9 @@ def build_parser() -> argparse.ArgumentParser:
     )
     batch_commands.add_parser("current", help="show the open batch")
     review = batch_commands.add_parser("review", help="mark a batch job reviewed")
-    review.add_argument("source", choices=("greenhouse", "lever", "france_travail"))
+    review.add_argument(
+        "source", choices=("greenhouse", "lever", "france_travail", "manual")
+    )
     review.add_argument("external_id")
     review.add_argument(
         "--decision", choices=DECISIONS,
@@ -148,6 +151,13 @@ def build_parser() -> argparse.ArgumentParser:
     mail_link.add_argument("job_id", type=int)
     mail_unlink = mail_commands.add_parser("unlink", help="remove a message association")
     mail_unlink.add_argument("mail_id", type=int)
+    job = subparsers.add_parser("job", help="manage individual jobs")
+    job_commands = job.add_subparsers(dest="job_command", required=True)
+    import_job = job_commands.add_parser(
+        "import", help="import one externally discovered job URL"
+    )
+    import_job.add_argument("url")
+    import_job.add_argument("--database", type=Path, default=Path("jobs.sqlite3"))
     return parser
 
 
@@ -546,6 +556,28 @@ def run_mail(args: argparse.Namespace) -> int:
     return 2
 
 
+def run_job(args: argparse.Namespace) -> int:
+    if args.job_command != "import":
+        return 2
+    prompt = input if sys.stdin.isatty() else None
+    result = JobImporter().import_url(args.url, args.database, prompt=prompt)
+    job = result.job
+    heading = "Job already exists" if result.existed else "Imported job"
+    print(f"{heading}: #{result.job_id}")
+    print(f"\nCompany: {job.company}")
+    print(f"Title: {job.title}")
+    print(f"Source: {job.source}")
+    print(f"State: {result.state}")
+    print(f"Work mode: {'full_remote' if job.full_remote else job.work_mode}")
+    print(f"URL: {job.url}")
+    print("\nNext:")
+    print(
+        f"job-harvester batch --database {args.database} "
+        "start --config config.toml"
+    )
+    return 0
+
+
 def relevant_jobs(
     config_path: Path, database_path: Path, *, new_only: bool
 ) -> list[StoredJob]:
@@ -636,6 +668,8 @@ def main(argv: Sequence[str] | None = None) -> int:
             return run_application(args)
         if args.command == "mail":
             return run_mail(args)
+        if args.command == "job":
+            return run_job(args)
     except (
         ConfigError,
         CollectionError,
@@ -646,6 +680,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         CareerOpsError,
         ApplicationError,
         MailError,
+        JobImportError,
         sqlite3.Error,
         OSError,
     ) as error:
