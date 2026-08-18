@@ -1,0 +1,4 @@
+[[sources]]
+type = "greenhouse"
+company = "Example Company"
+board_token = "examplecompany"

@@ -1,0 +1,18 @@
+{
+  "jobs": [
+    {
+      "absolute_url": "https://boards.greenhouse.io/acme/jobs/123",
+      "id": 123,
+      "internal_job_id": 987,
+      "location": {"name": "Paris, France"},
+      "title": "Platform Engineer",
+      "updated_at": "2026-08-17T12:00:00Z"
+    },
+    {
+      "absolute_url": "https://boards.greenhouse.io/acme/jobs/124",
+      "id": 124,
+      "title": "Data Engineer"
+    }
+  ],
+  "meta": {"total": 2}
+}
