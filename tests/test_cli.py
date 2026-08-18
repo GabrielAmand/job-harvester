@@ -77,6 +77,20 @@ class CliTests(unittest.TestCase):
         self.assertEqual(args.limit, 5)
         self.assertTrue(args.force)
 
+    def test_mail_cli_has_no_send_command(self) -> None:
+        args = cli.build_parser().parse_args([
+            "mail", "--database", str(self.database), "--config", str(self.config),
+            "list", "--attention",
+        ])
+        self.assertEqual(args.mail_command, "list")
+        self.assertTrue(args.attention)
+        mail_parser = next(
+            action for action in cli.build_parser()._actions
+            if getattr(action, "dest", None) == "command"
+        ).choices["mail"]
+        command_action = next(a for a in mail_parser._actions if a.dest == "mail_command")
+        self.assertNotIn("send", command_action.choices)
+
     def test_collects_greenhouse_and_lever_in_one_atomic_run(self) -> None:
         self.config.write_text(
             self.config.read_text()

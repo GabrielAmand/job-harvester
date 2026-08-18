@@ -68,3 +68,12 @@ enabled = false
 repository_path = "/path/to/career-ops"
 node_command = "node"
 batch_size = 20
+
+[email]
+provider = "gmail"
+# Dedicated job-search mailbox; also configure this identity in Career-Ops.
+address = "job-search@example.com"
+# Optional overrides; these user-owned files must never be committed.
+client_secret_path = "~/.config/job-harvester/google/client_secret.json"
+token_path = "~/.config/job-harvester/google/token.json"
+initial_lookback_days = 90

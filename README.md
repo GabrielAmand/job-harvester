@@ -5,8 +5,8 @@ normalizes them, stores them in SQLite, and reports newly discovered listings.
 Collection does not require Career-Ops or any hosted service. Evaluation and
 application-artifact preparation can optionally use a local Career-Ops checkout.
 
-> Status: V8 implemented with a separate, persistent, human-approved
-> application workflow after Career-Ops evaluation.
+> Status: V9 implemented with read-only Gmail ingestion after the persistent,
+> human-approved application workflow. Job Harvester never sends email.
 
 ## Collection workflow
 
@@ -149,6 +149,91 @@ records the explicit action time and an application-time snapshot, then uses
 Career-Ops' supported `set-status.mjs` interface when available. A tracker-sync
 failure is reported as pending and never rolls back Job Harvester's authoritative
 application record.
+
+## Gmail application mail
+
+V9 can read a dedicated Gmail mailbox through Google's official Gmail API and
+OAuth 2.0 desktop flow. It requests only
+`https://www.googleapis.com/auth/gmail.readonly`: it cannot send, modify, label,
+or delete mail. Gmail is an external communication source; Job Harvester's
+application workflow remains authoritative.
+
+### Google setup and authorization
+
+1. Create or select a project in Google Cloud Console.
+2. Enable the **Gmail API** for that project.
+3. Configure the OAuth consent screen. For an app in testing, add the dedicated
+   Gmail address as a test user.
+4. Create an OAuth client with application type **Desktop app**.
+5. Download its JSON credentials to the user-owned path below. Do not put it in
+   this repository.
+
+```toml
+[email]
+provider = "gmail"
+address = "job-search@example.com"
+client_secret_path = "~/.config/job-harvester/google/client_secret.json"
+token_path = "~/.config/job-harvester/google/token.json"
+initial_lookback_days = 90
+```
+
+The configured address validates that OAuth authorized the intended dedicated
+mailbox. Career-Ops candidate identity should use that same address, but Job
+Harvester does not edit Career-Ops identity or CV content.
+
+Run first-time authorization from a machine with a browser:
+
+```console
+job-harvester mail --config config.toml auth
+job-harvester mail --config config.toml status
+```
+
+The browser grants read-only access and returns to a temporary localhost OAuth
+callback. Job Harvester stores a refreshable token at the configured token path.
+It creates the containing directory with mode `0700` and the token with mode
+`0600`; neither the token nor client secret may be committed. `status` reports
+the mailbox identity but never prints credentials. If access is revoked or the
+token becomes invalid, authorize again. Access can be revoked from the Google
+Account **Security → Third-party apps and services** page; remove the local
+token file afterward if it is no longer needed.
+
+### Sync and review
+
+```console
+job-harvester mail --database jobs.sqlite3 --config config.toml sync
+job-harvester mail --database jobs.sqlite3 --config config.toml list --attention
+job-harvester mail --database jobs.sqlite3 --config config.toml show 12
+job-harvester mail --database jobs.sqlite3 --config config.toml link 12 59
+job-harvester mail --database jobs.sqlite3 --config config.toml unlink 12
+```
+
+Sync is explicitly invoked; V9 has no daemon, Pub/Sub subscription, scheduled
+follow-up, or outgoing Gmail action. The first sync looks back 90 days by
+default. Later syncs query from a one-minute overlap before the largest stored
+Gmail internal timestamp. Gmail message IDs make repeats idempotent, and the
+cursor advances only after the complete fetch and database transaction succeed.
+This conservative V9 strategy does not use the Gmail History API: messages older
+than the initial window require increasing `initial_lookback_days` before the
+first sync (or syncing into a fresh temporary database).
+
+Matching is deterministic. An existing linked Gmail thread has priority,
+followed by a unique applied application supported by company plus sender-domain
+or company plus job-title evidence. Ambiguous mail remains unmatched. A manual
+link makes later messages in the same thread inherit the association. No LLM or
+Career-Ops receives mail content.
+
+Classification uses conservative English and French phrases for receipt,
+rejection, interview, assessment, and explicit offer/next-step mail. Ambiguous
+content is `unknown`. Matched mail creates an application history event without
+changing lifecycle state. Rejections and action-oriented replies are attention
+items, not automatic workflow transitions or replies.
+
+Locally, `mail_messages` stores Gmail message/thread IDs, timestamps, sender and
+recipient headers, subject, normalized plain text, match/classification metadata,
+and attention state. It does not store full MIME payloads or attachments.
+`mail_sync_state` stores only the provider cursor and last successful sync time.
+Because mail content is sensitive, full bodies appear only in explicit
+`mail show`; normal list and error output stay concise.
 
 ## Filtering
 

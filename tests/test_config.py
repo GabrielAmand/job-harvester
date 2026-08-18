@@ -69,6 +69,18 @@ class ConfigTests(unittest.TestCase):
         self.assertEqual(career_ops.node_command, "node22")
         self.assertEqual(career_ops.batch_size, 5)
 
+    def test_loads_email_configuration(self) -> None:
+        path = self.directory / "config.toml"
+        path.write_text(
+            '[email]\nprovider = "gmail"\naddress = "jobs@example.com"\n'
+            'client_secret_path = "~/gmail-client.json"\n'
+            'token_path = "~/gmail-token.json"\ninitial_lookback_days = 30\n'
+        )
+        email = load_config(path).email
+        self.assertEqual(email.address, "jobs@example.com")
+        self.assertEqual(email.client_secret_path, Path("~/gmail-client.json").expanduser())
+        self.assertEqual(email.initial_lookback_days, 30)
+
     def test_loads_france_travail_search_terms(self) -> None:
         path = self.directory / "config.toml"
         path.write_text(
@@ -108,6 +120,8 @@ class ConfigTests(unittest.TestCase):
                 '[career_ops]\nbatch_size = 0\n',
                 "positive integer",
             ),
+            ('[email]\nprovider = "imap"\n', "provider"),
+            ('[email]\naddress = "not-an-address"\n', "valid email"),
         ]
         for content, message in cases:
             with self.subTest(content=content):

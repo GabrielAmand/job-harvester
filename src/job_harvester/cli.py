@@ -36,6 +36,8 @@ from job_harvester.models import StoredJob
 from job_harvester.registry import BoardRegistry, RegistryError
 from job_harvester.revalidation import RevalidationError
 from job_harvester.storage import JobStore
+from job_harvester.gmail import authorize as gmail_authorize, status as gmail_status, sync as gmail_sync
+from job_harvester.mail import MailError, MailStore
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -127,6 +129,22 @@ def build_parser() -> argparse.ArgumentParser:
         "open", help="print application URL and Career-Ops artifact locations"
     )
     open_job.add_argument("job_id", type=int)
+    mail = subparsers.add_parser("mail", help="ingest and review Gmail application mail")
+    mail.add_argument("--database", type=Path, default=Path("jobs.sqlite3"))
+    mail.add_argument("--config", type=Path, default=Path("config.toml"))
+    mail_commands = mail.add_subparsers(dest="mail_command", required=True)
+    mail_commands.add_parser("auth", help="authorize read-only Gmail access")
+    mail_commands.add_parser("status", help="check Gmail configuration and authentication")
+    mail_commands.add_parser("sync", help="incrementally ingest Gmail messages")
+    mail_list = mail_commands.add_parser("list", help="list locally stored Gmail messages")
+    mail_list.add_argument("--attention", action="store_true", help="only show messages requiring attention")
+    mail_show = mail_commands.add_parser("show", help="show one locally stored message")
+    mail_show.add_argument("mail_id", type=int)
+    mail_link = mail_commands.add_parser("link", help="manually associate a message with a job application")
+    mail_link.add_argument("mail_id", type=int)
+    mail_link.add_argument("job_id", type=int)
+    mail_unlink = mail_commands.add_parser("unlink", help="remove a message association")
+    mail_unlink.add_argument("mail_id", type=int)
     return parser
 
 
@@ -455,6 +473,61 @@ def run_application(args: argparse.Namespace) -> int:
     return 2
 
 
+def run_mail(args: argparse.Namespace) -> int:
+    config = load_config(args.config)
+    if args.mail_command == "auth":
+        address = gmail_authorize(config.email)
+        print(f"Authorized read-only Gmail access for {address}.")
+        return 0
+    if args.mail_command == "status":
+        address = gmail_status(config.email)
+        print(f"Gmail authentication is usable for {address} (read-only).")
+        return 0
+    if args.mail_command == "sync":
+        inserted, matched, fetched = gmail_sync(args.database, config.email)
+        print(f"Gmail sync complete: fetched {fetched}; stored {inserted}; matched {matched}.")
+        return 0
+    with MailStore(args.database) as store:
+        if args.mail_command == "list":
+            messages = store.list(attention_only=args.attention)
+            for message in messages:
+                heading = "UNMATCHED" if message.matched_job_id is None else message.classification.replace("_", " ").upper()
+                print(heading)
+                if message.matched_job_id is not None:
+                    print(f"Mail #{message.id} | Job #{message.matched_job_id} | {message.company} | {message.title}")
+                else:
+                    print(f"Mail #{message.id} | no application match")
+                print(f"From: {message.sender}")
+                print(f"Subject: {message.subject or '—'}")
+                print(f"Received: {message.received_at.isoformat()}")
+                print(f"Thread: {message.provider_thread_id}")
+                print()
+            print(f"{len(messages)} mail message(s).")
+            return 0
+        if args.mail_command == "show":
+            message = store.get(args.mail_id)
+            print(f"Mail #{message.id} | {message.classification} | {message.processing_state}")
+            print(f"Gmail message: {message.provider_message_id}")
+            print(f"Thread: {message.provider_thread_id}")
+            print(f"From: {message.sender}")
+            print(f"To: {message.recipients}")
+            print(f"Subject: {message.subject or '—'}")
+            print(f"Received: {message.received_at.isoformat()}")
+            print(f"Job: {message.matched_job_id or 'unmatched'}")
+            print(f"Match: {message.match_confidence or '—'} — {message.match_reason or '—'}")
+            print("\nBody:\n" + (message.body or "—"))
+            return 0
+        if args.mail_command == "link":
+            store.link(args.mail_id, args.job_id)
+            print(f"Linked mail #{args.mail_id} to job #{args.job_id}.")
+            return 0
+        if args.mail_command == "unlink":
+            store.unlink(args.mail_id)
+            print(f"Unlinked mail #{args.mail_id}.")
+            return 0
+    return 2
+
+
 def relevant_jobs(
     config_path: Path, database_path: Path, *, new_only: bool
 ) -> list[StoredJob]:
@@ -543,6 +616,8 @@ def main(argv: Sequence[str] | None = None) -> int:
             return run_batch(args)
         if args.command == "application":
             return run_application(args)
+        if args.command == "mail":
+            return run_mail(args)
     except (
         ConfigError,
         CollectionError,
@@ -552,6 +627,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         RevalidationError,
         CareerOpsError,
         ApplicationError,
+        MailError,
         sqlite3.Error,
         OSError,
     ) as error:

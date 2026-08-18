@@ -1,4 +1,4 @@
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 import tomllib
 
@@ -59,10 +59,24 @@ class CareerOpsConfig:
 
 
 @dataclass(frozen=True, slots=True)
+class EmailConfig:
+    provider: str = "gmail"
+    address: str | None = None
+    client_secret_path: Path = field(default_factory=lambda: Path(
+        "~/.config/job-harvester/google/client_secret.json"
+    ).expanduser())
+    token_path: Path = field(default_factory=lambda: Path(
+        "~/.config/job-harvester/google/token.json"
+    ).expanduser())
+    initial_lookback_days: int = 90
+
+
+@dataclass(frozen=True, slots=True)
 class Config:
     sources: tuple[GreenhouseSource | LeverSource | FranceTravailSource, ...]
     filters: Filters
     career_ops: CareerOpsConfig = CareerOpsConfig()
+    email: EmailConfig = EmailConfig()
 
 
 def _nonempty_string(value: object, field: str, index: int) -> str:
@@ -133,6 +147,33 @@ def _career_ops_config(raw: object) -> CareerOpsConfig:
         repository_path=Path(repository).expanduser() if repository is not None else None,
         node_command=node_command.strip(),
         batch_size=batch_size,
+    )
+
+
+def _email_config(raw: object) -> EmailConfig:
+    if raw is None:
+        return EmailConfig()
+    if not isinstance(raw, dict):
+        raise ConfigError("email must be a table")
+    provider = raw.get("provider", "gmail")
+    if provider != "gmail":
+        raise ConfigError('email.provider must be "gmail"')
+    address = raw.get("address")
+    if address is not None and (not isinstance(address, str) or "@" not in address):
+        raise ConfigError("email.address must be a valid email address")
+    defaults = EmailConfig()
+    client_path = raw.get("client_secret_path", str(defaults.client_secret_path))
+    token_path = raw.get("token_path", str(defaults.token_path))
+    for name, value in (("client_secret_path", client_path), ("token_path", token_path)):
+        if not isinstance(value, str) or not value.strip():
+            raise ConfigError(f"email.{name} must be a non-empty path")
+    lookback = raw.get("initial_lookback_days", 90)
+    if not isinstance(lookback, int) or isinstance(lookback, bool) or lookback <= 0:
+        raise ConfigError("email.initial_lookback_days must be a positive integer")
+    return EmailConfig(
+        provider="gmail", address=address.strip() if address else None,
+        client_secret_path=Path(client_path).expanduser(),
+        token_path=Path(token_path).expanduser(), initial_lookback_days=lookback,
     )
 
 
@@ -218,4 +259,7 @@ def load_config(path: str | Path) -> Config:
             else Filters().excluded_title_phrases
         ),
     )
-    return Config(tuple(sources), filters, _career_ops_config(document.get("career_ops")))
+    return Config(
+        tuple(sources), filters, _career_ops_config(document.get("career_ops")),
+        _email_config(document.get("email")),
+    )
