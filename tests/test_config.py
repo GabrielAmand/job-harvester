@@ -2,7 +2,7 @@ from pathlib import Path
 import tempfile
 import unittest
 
-from job_harvester.config import ConfigError, LeverSource, load_config
+from job_harvester.config import ConfigError, FranceTravailSource, LeverSource, load_config
 
 
 class ConfigTests(unittest.TestCase):
@@ -51,10 +51,21 @@ class ConfigTests(unittest.TestCase):
         self.assertIsInstance(config.sources[1], LeverSource)
         self.assertEqual(config.sources[1].company_slug, "other")  # type: ignore[union-attr]
 
+    def test_loads_france_travail_search_terms(self) -> None:
+        path = self.directory / "config.toml"
+        path.write_text(
+            '[[sources]]\ntype = "france_travail"\n'
+            'search_terms = ["DevOps", "Ingénieur systèmes"]\n'
+        )
+        source = load_config(path).sources[0]
+        self.assertIsInstance(source, FranceTravailSource)
+        self.assertEqual(source.search_terms, ("DevOps", "Ingénieur systèmes"))  # type: ignore[union-attr]
+
     def test_rejects_invalid_configuration(self) -> None:
         cases = [
             ("", "at least one"),
             ('[[sources]]\ntype = "lever"\ncompany = "Acme"\n', "company_slug"),
+            ('[[sources]]\ntype = "france_travail"\n', "search_terms"),
             ('[[sources]]\ntype = "other"\ncompany = "Acme"\n', "unsupported"),
             ('[[sources]]\ntype = "greenhouse"\ncompany = "Acme"\n', "board_token"),
             (

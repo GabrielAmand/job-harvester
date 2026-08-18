@@ -22,6 +22,12 @@ class LeverSource:
 
 
 @dataclass(frozen=True, slots=True)
+class FranceTravailSource:
+    search_terms: tuple[str, ...]
+    type: str = "france_travail"
+
+
+@dataclass(frozen=True, slots=True)
 class Filters:
     positive_title_keywords: tuple[str, ...] = ()
     negative_title_keywords: tuple[str, ...] = ()
@@ -33,7 +39,7 @@ class Filters:
 
 @dataclass(frozen=True, slots=True)
 class Config:
-    sources: tuple[GreenhouseSource | LeverSource, ...]
+    sources: tuple[GreenhouseSource | LeverSource | FranceTravailSource, ...]
     filters: Filters
 
 
@@ -54,6 +60,21 @@ def _keyword_list(raw: object, field: str) -> tuple[str, ...]:
             raise ConfigError(f"filters.{field}[{index}] must be a non-empty string")
         keywords.append(value.strip())
     return tuple(keywords)
+
+
+def _source_string_list(raw: object, field: str, source_index: int) -> tuple[str, ...]:
+    if not isinstance(raw, list) or not raw:
+        raise ConfigError(
+            f"sources[{source_index}].{field} must be a non-empty array of strings"
+        )
+    values: list[str] = []
+    for index, value in enumerate(raw):
+        if not isinstance(value, str) or not value.strip():
+            raise ConfigError(
+                f"sources[{source_index}].{field}[{index}] must be a non-empty string"
+            )
+        values.append(value.strip())
+    return tuple(values)
 
 
 def _boolean(raw: object, field: str, default: bool) -> bool:
@@ -78,26 +99,33 @@ def load_config(path: str | Path) -> Config:
     if not isinstance(raw_sources, list) or not raw_sources:
         raise ConfigError("configuration must contain at least one [[sources]] entry")
 
-    sources: list[GreenhouseSource | LeverSource] = []
+    sources: list[GreenhouseSource | LeverSource | FranceTravailSource] = []
     for index, raw in enumerate(raw_sources):
         if not isinstance(raw, dict):
             raise ConfigError(f"sources[{index}] must be a table")
         source_type = _nonempty_string(raw.get("type"), "type", index)
-        company = _nonempty_string(raw.get("company"), "company", index)
         if source_type == "greenhouse":
             sources.append(
                 GreenhouseSource(
-                    company=company,
+                    company=_nonempty_string(raw.get("company"), "company", index),
                     board_token=_nonempty_string(raw.get("board_token"), "board_token", index),
                 )
             )
         elif source_type == "lever":
             sources.append(
                 LeverSource(
-                    company=company,
+                    company=_nonempty_string(raw.get("company"), "company", index),
                     company_slug=_nonempty_string(
                         raw.get("company_slug"), "company_slug", index
                     ),
+                )
+            )
+        elif source_type == "france_travail":
+            sources.append(
+                FranceTravailSource(
+                    search_terms=_source_string_list(
+                        raw.get("search_terms"), "search_terms", index
+                    )
                 )
             )
         else:

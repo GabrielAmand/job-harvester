@@ -6,9 +6,15 @@ import sys
 from collections.abc import Sequence
 
 from job_harvester.collectors.base import CollectionError
+from job_harvester.collectors.france_travail import FranceTravailCollector
 from job_harvester.collectors.greenhouse import GreenhouseCollector
 from job_harvester.collectors.lever import LeverCollector
-from job_harvester.config import ConfigError, GreenhouseSource, load_config
+from job_harvester.config import (
+    ConfigError,
+    FranceTravailSource,
+    GreenhouseSource,
+    load_config,
+)
 from job_harvester.filters import is_relevant
 from job_harvester.models import StoredJob
 from job_harvester.storage import JobStore
@@ -37,10 +43,18 @@ def build_parser() -> argparse.ArgumentParser:
 
 def run_collect(config_path: Path, database_path: Path) -> int:
     config = load_config(config_path)
-    jobs_by_source: dict[str, list] = {"greenhouse": [], "lever": []}
+    jobs_by_source: dict[str, list] = {
+        "greenhouse": [],
+        "lever": [],
+        "france_travail": [],
+    }
+    configured_source_types: set[str] = set()
     for source in config.sources:
+        configured_source_types.add(source.type)
         if isinstance(source, GreenhouseSource):
             collected = GreenhouseCollector(source.company, source.board_token).collect()
+        elif isinstance(source, FranceTravailSource):
+            collected = FranceTravailCollector(source.search_terms).collect()
         else:
             collected = LeverCollector(source.company, source.company_slug).collect()
         jobs_by_source[source.type].extend(collected)
@@ -52,13 +66,13 @@ def run_collect(config_path: Path, database_path: Path) -> int:
             for record in store.list_jobs()
         }
     for source_type, source_jobs in jobs_by_source.items():
-        if not source_jobs:
+        if source_type not in configured_source_types:
             continue
         unique_jobs = {(job.source, job.external_id) for job in source_jobs}
         new = sum(states[identity] == "new" for identity in unique_jobs)
         updated = sum(states[identity] == "updated" for identity in unique_jobs)
         print(
-            f"{source_type.title()}: Found {len(source_jobs)}; "
+            f"{source_type.replace('_', ' ').title()}: Found {len(source_jobs)}; "
             f"{new} new; {updated} updated."
         )
     print(f"Total: Found {len(jobs)}; {result.new} new; {result.updated} updated.")

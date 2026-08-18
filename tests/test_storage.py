@@ -82,6 +82,17 @@ class StorageTests(unittest.TestCase):
         self.assertEqual(result.new, 2)
         self.assertEqual(sources, {"greenhouse", "lever"})
 
+    def test_all_three_sources_with_the_same_id_coexist(self) -> None:
+        with JobStore(self.database) as store:
+            result = store.upsert([
+                make_job(),
+                make_job(source="lever"),
+                make_job(source="france_travail"),
+            ])
+            sources = {record.job.source for record in store.list_jobs()}
+        self.assertEqual(result.new, 3)
+        self.assertEqual(sources, {"greenhouse", "lever", "france_travail"})
+
     def test_rows_missing_from_later_collection_are_retained(self) -> None:
         with JobStore(self.database) as store:
             store.upsert([make_job(), make_job(external_id="456")])

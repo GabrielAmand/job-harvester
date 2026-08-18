@@ -4,13 +4,13 @@ Job Harvester will be a small, local-first CLI that collects public job offers,
 normalizes them, stores them in SQLite, and reports newly discovered listings.
 It will not require Career-Ops or any hosted service.
 
-> Status: V3 implemented with Greenhouse and Lever collection through one
-> normalized, deterministic pipeline.
+> Status: V4 implemented with Greenhouse, Lever, and France Travail collection
+> through one normalized, deterministic pipeline.
 
 ## Daily workflow
 
-Configure one or more Greenhouse and/or Lever boards and the relevance filters in
-`config.toml`, then run:
+Configure one or more Greenhouse boards, Lever boards, and/or France Travail
+searches plus the relevance filters in `config.toml`, then run:
 
 ```console
 job-harvester collect --config config.toml --database jobs.sqlite3
@@ -83,8 +83,11 @@ Work mode is normalized as `remote`, `hybrid`, `onsite`, or `unknown`. Remote
 scope is `france`, `europe`, `worldwide`, `restricted`, or `unknown`. Lever's
 structured `workplaceType` is authoritative when explicit, with structured
 locations used for scope; `unspecified` falls back to explicit title, location,
-and description wording. Greenhouse does not expose a standard work-mode field,
-so Job Harvester conservatively
+and description wording. France Travail structured telework data takes priority
+when present; because its v2 offer schema does not guarantee that field, explicit
+title/location and then description wording are conservative fallbacks.
+Greenhouse does not expose a standard work-mode field, so Job Harvester
+conservatively
 checks exposed work-mode metadata, title/location, offices, and finally explicit
 phrases in the job description. Matching is boundary-aware and accent-insensitive;
 vague technical text such as “hybrid cloud” or “distributed systems” is ignored.
@@ -126,12 +129,13 @@ then by external ID. Each object has this stable, intentionally flat shape:
 
 Timestamps are ISO 8601 strings in UTC when present. The array can be consumed
 directly by Codex or another downstream tool; no Career-Ops integration is
-performed in V2.
+performed in V4.
 
 ## Collection
 
-One CLI command fetches every configured Greenhouse and Lever board through
-their public JSON APIs, normalizes all jobs, and writes them atomically.
+One CLI command fetches every configured Greenhouse and Lever board plus France
+Travail search through official JSON APIs, normalizes all jobs, and writes them
+atomically.
 
 ```console
 cp config.example.toml config.toml
@@ -139,7 +143,8 @@ cp config.example.toml config.toml
 job-harvester collect --config config.toml --database jobs.sqlite3
 Greenhouse: Found 42; 42 new; 0 updated.
 Lever: Found 18; 18 new; 0 updated.
-Total: Found 60; 60 new; 0 updated.
+France Travail: Found 120; 110 new; 4 updated.
+Total: Found 180; 170 new; 4 updated.
 ```
 
 Running the same command again keeps the existing rows and should report zero
@@ -179,10 +184,12 @@ job-harvester/
 │   ├── storage.py         # SQLite schema and upserts
 │   └── collectors/
 │       ├── base.py        # small Collector protocol
+│       ├── france_travail.py # France Travail OAuth and offer mapping
 │       ├── greenhouse.py  # Greenhouse HTTP mapping
 │       └── lever.py       # Lever Postings API mapping
 └── tests/
     ├── fixtures/          # saved, sanitized API responses
+    ├── test_france_travail.py
     ├── test_greenhouse.py
     └── test_storage.py
 ```
@@ -195,8 +202,8 @@ TOML config -> source collectors -> normalized Job records -> SQLite -> CLI coun
 
 Each collector accepts source-specific configuration and returns normalized
 `Job` records. It does not know about SQLite or Career-Ops. The CLI coordinates
-collectors and storage. A Lever collector can therefore be added later without
-introducing a plugin framework, service layer, or dependency injection system.
+collectors and storage without a plugin framework, service layer, or dependency
+injection system.
 
 ## Normalized record and persistence
 
@@ -215,7 +222,7 @@ The initial normalized record contains:
 
 SQLite enforces `UNIQUE (source, external_id)`. For Greenhouse,
 `external_id` is the public job-post `id`, not `internal_job_id`. For Lever, it
-is the posting `id`. An upsert may
+is the posting `id`; for France Travail, it is the offer `id`. An upsert may
 refresh mutable fields such as title, location, and URL, but it must preserve
 the original `collected_at`. Whether an upsert inserted a new key determines
 the CLI's `new` count. Rows absent from a later response remain stored so that
@@ -235,11 +242,26 @@ board_token = "examplecompany"
 type = "lever"
 company = "Example Lever Company"
 company_slug = "examplelevercompany"
+
+[[sources]]
+type = "france_travail"
+search_terms = ["DevOps", "Cloud", "Administrateur systèmes"]
 ```
 
-`config.toml` and SQLite files will be ignored by Git. Future authenticated
-sources, such as France Travail, must read credentials from environment
-variables; credentials do not belong in TOML.
+France Travail search terms are examples only and are fully configurable. Set
+credentials in the process environment before collection:
+
+```console
+export FRANCE_TRAVAIL_CLIENT_ID="your-client-id"
+export FRANCE_TRAVAIL_CLIENT_SECRET="your-client-secret"
+job-harvester collect --config config.toml --database jobs.sqlite3
+```
+
+Create an application at `francetravail.io`, subscribe it to “Offres d'emploi
+v2,” and use its client ID and secret. Authentication uses OAuth2
+`client_credentials` for the `/partenaire` realm with scopes
+`api_offresdemploiv2 o2dsoffre`. `config.toml`, SQLite files, credentials, and
+access tokens must not be committed; credentials do not belong in TOML.
 
 ## Greenhouse assumptions and risks
 
@@ -283,6 +305,24 @@ variables; credentials do not belong in TOML.
 - Lever and Greenhouse IDs may match safely because identity remains
   `UNIQUE(source, external_id)`.
 
-V3 intentionally does not add other sources, scraping, lifecycle/closure
+## France Travail assumptions and risks
+
+- V4 uses only the official authenticated API at
+  `api.francetravail.io/partenaire/offresdemploi/v2`; it does not scrape HTML.
+- Each configured term is searched independently. Results are paged using
+  `Content-Range` within the API's result window and overlapping offer IDs are
+  deduplicated before storage.
+- `dateCreation` is the API's offer-creation timestamp and is stored as
+  `published_at`; `dateActualisation` is not substituted for publication.
+- Employer names can be absent. Such offers use `Entreprise non précisée`, and
+  invalid or absent origin URLs fall back to the official offer-detail URL.
+- The current v2 schema does not guarantee a dedicated telework field. When one
+  is returned, total/partial/no-telework values are authoritative; otherwise V4
+  uses only explicit deterministic wording and leaves vague evidence unknown.
+- A missing credential, failed token request, failed search, malformed page, or
+  other source failure occurs before SQLite opens and aborts the entire atomic
+  collection run.
+
+V4 intentionally does not add other sources, scraping, lifecycle/closure
 tracking, scoring, an LLM, a web interface, scheduling, Docker, or Career-Ops
 integration.

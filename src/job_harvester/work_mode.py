@@ -203,3 +203,60 @@ def classify_lever_work_mode(raw: dict[str, Any]) -> tuple[str, str]:
     if work_mode == "remote" and scope == "unknown" and isinstance(country, str) and country:
         scope = "restricted"
     return work_mode, scope
+
+
+def classify_france_travail_work_mode(raw: dict[str, Any]) -> tuple[str, str]:
+    """Classify France Travail evidence, preferring structured telework data."""
+    structured = raw.get("teletravail")
+    if isinstance(structured, dict):
+        structured = structured.get("libelle", structured.get("value"))
+    structured_text = _plain(structured) if isinstance(structured, str) else ""
+    if re.search(r"\b(?:sans|aucun|pas de|non) teletravail\b", structured_text):
+        work_mode = "onsite"
+    elif re.search(r"\b(?:partiel|hybride|occasionnel)\b", structured_text):
+        work_mode = "hybrid"
+    elif re.search(r"\b(?:total|integral|100 ?%)\b", structured_text):
+        work_mode = "remote"
+    else:
+        work_mode = "unknown"
+    structured_unspecified = bool(
+        re.fullmatch(r"(?:non |pas )?(?:precise|renseigne|specifie|connu)", structured_text)
+    )
+
+    location = raw.get("lieuTravail")
+    location = location if isinstance(location, dict) else {}
+    location_name = location.get("libelle")
+    if not isinstance(location_name, str):
+        location_name = ""
+    if work_mode == "unknown" and (not structured_text or structured_unspecified):
+        work_mode, _ = classify_work_mode(
+            {
+                "title": raw.get("intitule"),
+                "location": {"name": location_name},
+                "content": raw.get("description"),
+            }
+        )
+    evidence = _plain(
+        " ".join(
+            value
+            for value in (
+                structured if isinstance(structured, str) else "",
+                raw.get("intitule"),
+                location_name,
+                raw.get("description"),
+            )
+            if isinstance(value, str)
+        )
+    )
+    scope = (
+        _scope(evidence, _plain(location_name), work_mode)
+        if work_mode in {"remote", "hybrid"}
+        else "unknown"
+    )
+    french_location = any(
+        isinstance(location.get(field), str) and bool(location[field].strip())
+        for field in ("codePostal", "commune")
+    ) or bool(re.search(r"\bfrance\b", _plain(location_name)))
+    if work_mode in {"remote", "hybrid"} and french_location:
+        scope = "france"
+    return work_mode, scope

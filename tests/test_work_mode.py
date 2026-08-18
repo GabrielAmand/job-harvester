@@ -1,6 +1,10 @@
 import unittest
 
-from job_harvester.work_mode import classify_lever_work_mode, classify_work_mode
+from job_harvester.work_mode import (
+    classify_france_travail_work_mode,
+    classify_lever_work_mode,
+    classify_work_mode,
+)
 
 
 def classify(
@@ -122,4 +126,33 @@ class WorkModeTests(unittest.TestCase):
                 "descriptionPlain": "This is a hybrid role.",
             }),
             ("hybrid", "unknown"),
+        )
+
+    def test_france_travail_structured_telework_has_priority(self) -> None:
+        self.assertEqual(
+            classify_france_travail_work_mode({
+                "intitule": "On-site Engineer",
+                "description": "Poste sans télétravail.",
+                "teletravail": {"libelle": "Télétravail total"},
+                "lieuTravail": {"libelle": "75 - Paris", "codePostal": "75001"},
+            }),
+            ("remote", "france"),
+        )
+        self.assertEqual(
+            classify_france_travail_work_mode({
+                "intitule": "Remote Engineer",
+                "description": "Poste entièrement à distance.",
+                "teletravail": "Télétravail possible selon accord",
+                "lieuTravail": {"libelle": "75 - Paris", "codePostal": "75001"},
+            }),
+            ("unknown", "unknown"),
+        )
+        self.assertEqual(
+            classify_france_travail_work_mode({
+                "intitule": "Engineer",
+                "description": "Poste entièrement à distance.",
+                "teletravail": "Non précisé",
+                "lieuTravail": {"libelle": "France"},
+            }),
+            ("remote", "france"),
         )

@@ -1,0 +1,31 @@
+{
+  "resultats": [
+    {
+      "id": "201ABCD",
+      "intitule": "Ingénieur DevOps (H/F)",
+      "description": "Automatisation des plateformes cloud.",
+      "dateCreation": "2026-08-18T08:15:42Z",
+      "lieuTravail": {
+        "libelle": "75 - Paris",
+        "codePostal": "75001",
+        "commune": "75101"
+      },
+      "entreprise": {"nom": "Exemple SAS"},
+      "teletravail": {"libelle": "Télétravail partiel"},
+      "origineOffre": {
+        "origine": "1",
+        "urlOrigine": "https://candidat.francetravail.fr/offres/recherche/detail/201ABCD"
+      }
+    },
+    {
+      "id": "202EFGH",
+      "intitule": "Administrateur systèmes Linux",
+      "description": "Poste sur site au sein de l'équipe infrastructure.",
+      "dateCreation": "2026-08-17T10:00:00+00:00",
+      "lieuTravail": {"libelle": "69 - Lyon", "codePostal": "69001"},
+      "entreprise": {},
+      "teletravail": "Pas de télétravail",
+      "origineOffre": {"origine": "1"}
+    }
+  ]
+}

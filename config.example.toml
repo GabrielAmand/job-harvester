@@ -8,6 +8,24 @@ type = "lever"
 company = "Example Lever Company"
 company_slug = "examplelevercompany"
 
+[[sources]]
+type = "france_travail"
+search_terms = [
+  "DevOps",
+  "Cloud",
+  "Infrastructure",
+  "Linux",
+  "SRE",
+  "Site Reliability",
+  "Administrateur systèmes",
+  "Ingénieur systèmes",
+  "Ingénieur production",
+  "Cloud Engineer",
+  "Platform Engineer",
+  "Automation",
+  "CI/CD",
+]
+
 [filters]
 positive_title_keywords = [
   "devops",

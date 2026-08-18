@@ -62,6 +62,29 @@ class CliTests(unittest.TestCase):
         self.assertIn("Lever: Found 1; 1 new; 0 updated.", output.getvalue())
         self.assertIn("Total: Found 2; 2 new; 0 updated.", output.getvalue())
 
+    def test_collects_all_three_sources_and_reports_france_travail(self) -> None:
+        self.config.write_text(
+            self.config.read_text()
+            + '[[sources]]\ntype = "lever"\ncompany = "Other"\ncompany_slug = "other"\n'
+            + '[[sources]]\ntype = "france_travail"\nsearch_terms = ["DevOps"]\n'
+        )
+        jobs = {
+            "greenhouse": [Job("greenhouse", "same", "Acme", "Engineer", "Paris", "https://gh")],
+            "lever": [Job("lever", "same", "Other", "Engineer", "Remote", "https://lever")],
+            "france_travail": [Job("france_travail", "same", "FT", "DevOps", "Paris", "https://ft")],
+        }
+        output = io.StringIO()
+        arguments = ["collect", "--config", str(self.config), "--database", str(self.database)]
+        with patch.object(cli.GreenhouseCollector, "collect", return_value=jobs["greenhouse"]), \
+             patch.object(cli.LeverCollector, "collect", return_value=jobs["lever"]), \
+             patch.object(cli.FranceTravailCollector, "collect", return_value=jobs["france_travail"]), \
+             redirect_stdout(output):
+            self.assertEqual(cli.main(arguments), 0)
+        with JobStore(self.database) as store:
+            self.assertEqual(len(store.list_jobs()), 3)
+        self.assertIn("France Travail: Found 1; 1 new; 0 updated.", output.getvalue())
+        self.assertIn("Total: Found 3; 3 new; 0 updated.", output.getvalue())
+
     def test_collect_failure_is_nonzero_and_does_not_create_database(self) -> None:
         errors = io.StringIO()
         with redirect_stderr(errors):
@@ -100,6 +123,24 @@ class CliTests(unittest.TestCase):
         greenhouse = [Job("greenhouse", "1", "Acme", "Engineer", "Paris", "https://gh")]
         with patch.object(cli.GreenhouseCollector, "collect", return_value=greenhouse), \
              patch.object(cli.LeverCollector, "collect", side_effect=CollectionError("failed")):
+            result = cli.main([
+                "collect", "--config", str(self.config), "--database", str(self.database)
+            ])
+        self.assertEqual(result, 1)
+        self.assertFalse(self.database.exists())
+
+    def test_france_travail_failure_prevents_other_source_writes(self) -> None:
+        self.config.write_text(
+            self.config.read_text()
+            + '[[sources]]\ntype = "france_travail"\nsearch_terms = ["DevOps"]\n'
+        )
+        greenhouse = [Job("greenhouse", "1", "Acme", "Engineer", "Paris", "https://gh")]
+        with patch.object(cli.GreenhouseCollector, "collect", return_value=greenhouse), \
+             patch.object(
+                 cli.FranceTravailCollector,
+                 "collect",
+                 side_effect=CollectionError("authentication failed"),
+             ):
             result = cli.main([
                 "collect", "--config", str(self.config), "--database", str(self.database)
             ])
