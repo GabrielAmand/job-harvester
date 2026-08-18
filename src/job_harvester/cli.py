@@ -6,6 +6,7 @@ import sys
 from collections.abc import Sequence
 
 from job_harvester.board_validation import BoardValidator
+from job_harvester.batches import BatchError, BatchStore, start_batch
 from job_harvester.collectors.base import CollectionError
 from job_harvester.collectors.france_travail import FranceTravailCollector
 from job_harvester.collectors.greenhouse import GreenhouseCollector
@@ -21,6 +22,7 @@ from job_harvester.discovery import DiscoveryError, discover_boards
 from job_harvester.filters import is_relevant
 from job_harvester.models import StoredJob
 from job_harvester.registry import BoardRegistry, RegistryError
+from job_harvester.revalidation import RevalidationError
 from job_harvester.storage import JobStore
 
 
@@ -60,6 +62,23 @@ def build_parser() -> argparse.ArgumentParser:
     validate.add_argument("slug", nargs="?")
     discover = board_commands.add_parser("discover", help="import candidate board URLs")
     discover.add_argument("--input", type=Path, required=True)
+    batch = subparsers.add_parser("batch", help="manage persistent review batches")
+    batch.add_argument("--database", type=Path, default=Path("jobs.sqlite3"))
+    batch_commands = batch.add_subparsers(dest="batch_command", required=True)
+    start = batch_commands.add_parser("start", help="create a review batch")
+    start.add_argument("--config", type=Path, default=Path("config.toml"))
+    start.add_argument("--limit", type=int, default=20)
+    batch_commands.add_parser("current", help="show the open batch")
+    review = batch_commands.add_parser("review", help="mark a batch job reviewed")
+    review.add_argument("source", choices=("greenhouse", "lever", "france_travail"))
+    review.add_argument("external_id")
+    review.add_argument(
+        "--decision", choices=("interesting", "skip", "undecided"),
+        default="undecided",
+    )
+    batch_commands.add_parser("complete", help="complete the open batch")
+    batch_commands.add_parser("abandon", help="abandon the open batch")
+    batch_commands.add_parser("list", help="list current and previous batches")
     return parser
 
 
@@ -207,6 +226,66 @@ def run_boards(args: argparse.Namespace) -> int:
     return 2
 
 
+def _print_batch_entries(batch_id: int, entries: list | tuple) -> None:
+    reviewed = sum(entry.review_state == "reviewed" for entry in entries)
+    print(f"Batch {batch_id}: {reviewed}/{len(entries)} reviewed.")
+    for entry in entries:
+        job = entry.job
+        decision = f" ({entry.decision})" if entry.decision else ""
+        print(
+            f"{entry.position}. [{entry.review_state}{decision}] "
+            f"{job.company} — {job.title} | {job.source}/{job.external_id}"
+        )
+        print(f"   {job.work_mode} ({job.remote_scope}) | {job.url}")
+
+
+def run_batch(args: argparse.Namespace) -> int:
+    if args.batch_command == "start":
+        config = load_config(args.config)
+        result = start_batch(args.database, config.filters, limit=args.limit)
+        print(
+            f"Pending candidates: {result.pending_candidates}; "
+            f"revalidated: {result.revalidated}; expired: {result.expired}; "
+            f"batch size: {len(result.entries)}."
+        )
+        _print_batch_entries(result.batch.id, result.entries)
+        return 0
+    with BatchStore(args.database) as store:
+        if args.batch_command == "list":
+            batches = store.list()
+            for batch in batches:
+                entries = store.entries(batch.id)
+                reviewed = sum(entry.review_state == "reviewed" for entry in entries)
+                print(
+                    f"{batch.id} | {batch.status} | {reviewed}/{len(entries)} reviewed | "
+                    f"requested {batch.requested_limit}"
+                )
+            print(f"{len(batches)} batch(es).")
+            return 0
+        if args.batch_command == "current":
+            batch = store.current()
+            if batch is None:
+                print("No open batch.")
+                return 0
+            _print_batch_entries(batch.id, store.entries(batch.id))
+            return 0
+        if args.batch_command == "review":
+            store.review(args.source, args.external_id, args.decision)
+            print(
+                f"Reviewed: {args.source}/{args.external_id} ({args.decision})."
+            )
+            return 0
+        if args.batch_command == "complete":
+            batch = store.complete()
+            print(f"Completed batch {batch.id}.")
+            return 0
+        if args.batch_command == "abandon":
+            batch = store.abandon()
+            print(f"Abandoned batch {batch.id}.")
+            return 0
+    return 2
+
+
 def relevant_jobs(
     config_path: Path, database_path: Path, *, new_only: bool
 ) -> list[StoredJob]:
@@ -288,11 +367,15 @@ def main(argv: Sequence[str] | None = None) -> int:
             )
         if args.command == "boards":
             return run_boards(args)
+        if args.command == "batch":
+            return run_batch(args)
     except (
         ConfigError,
         CollectionError,
         DiscoveryError,
         RegistryError,
+        BatchError,
+        RevalidationError,
         sqlite3.Error,
         OSError,
     ) as error:

@@ -18,6 +18,7 @@ class Job:
     remote_scope: str = "unknown"
     published_at: datetime | None = None
     collected_at: datetime | None = None
+    source_key: str | None = None
 
     def discovered_at(self) -> datetime:
         return self.collected_at or utc_now()

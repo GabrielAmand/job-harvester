@@ -81,4 +81,5 @@ class GreenhouseCollector:
             url=absolute_url.strip(),
             work_mode=work_mode,
             remote_scope=remote_scope,
+            source_key=self.board_token,
         )

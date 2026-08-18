@@ -4,10 +4,10 @@ Job Harvester will be a small, local-first CLI that collects public job offers,
 normalizes them, stores them in SQLite, and reports newly discovered listings.
 It will not require Career-Ops or any hosted service.
 
-> Status: V5 implemented with a persistent Greenhouse/Lever board registry,
-> deterministic URL discovery, and three-source collection through one pipeline.
+> Status: V6 implemented with persistent, lazily revalidated review batches on
+> top of the three-source collection pipeline and ATS board registry.
 
-## Daily workflow
+## Collection workflow
 
 Configure one or more Greenhouse boards, Lever boards, and/or France Travail
 searches plus the relevance filters in `config.toml`, then run:
@@ -43,6 +43,40 @@ means jobs first discovered by the latest successful `collect`; running
 `collect` twice makes the second run's new set empty. Existing V1 databases are
 migrated automatically, with their existing rows initialized as `seen` and
 their original `collected_at` values preserved.
+
+## Review batches
+
+Review state is persistent and independent from collection state. Jobs begin as
+`pending`, become `in_review` when assigned to an open batch, and become
+`reviewed` after an explicit decision. Offers confirmed gone are `expired`.
+There is deliberately no daily quota or date-based reset.
+
+```console
+job-harvester batch --database jobs.sqlite3 start --config config.toml --limit 20
+job-harvester batch --database jobs.sqlite3 current
+job-harvester batch --database jobs.sqlite3 review greenhouse 123 --decision interesting
+job-harvester batch --database jobs.sqlite3 review lever abc --decision skip
+job-harvester batch --database jobs.sqlite3 complete
+job-harvester batch --database jobs.sqlite3 list
+```
+
+Only one batch may be open. `current` resumes it after a terminal restart, and
+`complete` succeeds only after every member is reviewed. `abandon` explicitly
+closes an unfinished batch and returns its unreviewed members to `pending`.
+Reviewed jobs never enter later batches.
+
+Before assignment, candidates are checked lazily through their original official
+API. Confirmed missing offers are marked expired and replacements are tried until
+the requested size is reached or candidates run out. Any temporary network,
+authentication, API, or response failure aborts batch creation atomically: no
+batch, expiry, or review-state changes are committed. Greenhouse and Lever jobs
+collected before V6 lack their persisted board slug and must be collected once
+with V6 before they can be revalidated.
+
+Candidate ordering is deterministic: remote, hybrid, unknown, then onsite;
+within each group, reliable publication timestamps sort newest first, followed
+by discovery time and stable source/company/title/ID tie-breakers. Existing
+filter eligibility still applies, and no numeric scoring is involved.
 
 ## Filtering
 
@@ -129,7 +163,7 @@ then by external ID. Each object has this stable, intentionally flat shape:
 
 Timestamps are ISO 8601 strings in UTC when present. The array can be consumed
 directly by Codex or another downstream tool; no Career-Ops integration is
-performed in V5.
+performed in V6.
 
 ## Collection
 
@@ -226,11 +260,13 @@ job-harvester/
 ├── src/job_harvester/
 │   ├── cli.py             # argument parsing and run summary
 │   ├── board_validation.py # official API board validation
+│   ├── batches.py         # persistent review queue and batch lifecycle
 │   ├── config.py          # TOML loading and validation
 │   ├── discovery.py       # candidate URL extraction/import
 │   ├── filters.py         # deterministic relevance matching
 │   ├── models.py          # normalized Job value object
 │   ├── registry.py        # persistent board registry
+│   ├── revalidation.py    # official per-offer availability checks
 │   ├── storage.py         # SQLite schema and upserts
 │   └── collectors/
 │       ├── base.py        # small Collector protocol
@@ -385,6 +421,6 @@ access tokens must not be committed; credentials do not belong in TOML.
   other source failure occurs before SQLite opens and aborts the entire atomic
   collection run.
 
-V5 intentionally does not add other sources, scraping, lifecycle/closure
-tracking, scoring, an LLM, a web interface, scheduling, Docker, or Career-Ops
-integration.
+V6 intentionally stops at the review decision. It does not add application
+lifecycle tracking, another source, scraping, daily quotas, scoring, an LLM, a
+web interface, scheduling, Docker, or Career-Ops integration.

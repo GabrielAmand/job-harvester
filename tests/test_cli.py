@@ -45,6 +45,29 @@ class CliTests(unittest.TestCase):
             "Total: Found 1; 0 new; 0 updated.\n",
         )
 
+    def test_persistent_batch_cli_workflow(self) -> None:
+        with JobStore(self.database) as store:
+            store.upsert([
+                Job(
+                    "greenhouse", "batch-1", "Acme", "Platform Engineer",
+                    "Paris", "https://job/1", source_key="acme",
+                )
+            ])
+        output = io.StringIO()
+        prefix = ["batch", "--database", str(self.database)]
+        with patch("job_harvester.batches.JobRevalidator.is_active", return_value=True), \
+             redirect_stdout(output):
+            self.assertEqual(cli.main(prefix + [
+                "start", "--config", str(self.config), "--limit", "1"
+            ]), 0)
+            self.assertEqual(cli.main(prefix + ["current"]), 0)
+            self.assertEqual(cli.main(prefix + [
+                "review", "greenhouse", "batch-1", "--decision", "skip"
+            ]), 0)
+            self.assertEqual(cli.main(prefix + ["complete"]), 0)
+        self.assertIn("batch size: 1", output.getvalue())
+        self.assertIn("Completed batch 1", output.getvalue())
+
     def test_collects_greenhouse_and_lever_in_one_atomic_run(self) -> None:
         self.config.write_text(
             self.config.read_text()

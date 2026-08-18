@@ -39,6 +39,7 @@ class LeverTests(unittest.TestCase):
             ("lever-124", "Site Reliability Engineer"),
         ])
         self.assertEqual(jobs[0].source, "lever")
+        self.assertEqual(jobs[0].source_key, "acme")
         self.assertEqual(jobs[0].location, "Remote - US")
         self.assertEqual((jobs[0].work_mode, jobs[0].remote_scope), ("remote", "restricted"))
         self.assertIsNone(jobs[0].published_at)

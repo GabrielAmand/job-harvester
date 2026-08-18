@@ -75,6 +75,14 @@ class StorageTests(unittest.TestCase):
                 store.upsert([make_job(), make_job(source="another")]).new, 2
             )
 
+    def test_source_key_is_persisted_without_counting_as_a_job_update(self) -> None:
+        with JobStore(self.database) as store:
+            store.upsert([make_job()])
+            result = store.upsert([make_job(source_key="acme")])
+            record = store.list_jobs()[0]
+        self.assertEqual((result.new, result.updated), (0, 0))
+        self.assertEqual(record.job.source_key, "acme")
+
     def test_greenhouse_and_lever_ids_coexist(self) -> None:
         with JobStore(self.database) as store:
             result = store.upsert([make_job(), make_job(source="lever")])

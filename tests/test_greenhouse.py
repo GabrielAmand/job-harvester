@@ -39,6 +39,7 @@ class GreenhouseTests(unittest.TestCase):
         self.assertIsNone(jobs[0].published_at)
         self.assertEqual(jobs[0].work_mode, "unknown")
         self.assertEqual(jobs[0].remote_scope, "unknown")
+        self.assertEqual(jobs[0].source_key, "acme")
         self.assertEqual(jobs[1].location, "")
 
     def test_rejects_bad_responses(self) -> None:

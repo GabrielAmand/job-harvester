@@ -23,6 +23,7 @@ CREATE TABLE IF NOT EXISTS jobs (
     url TEXT NOT NULL,
     collected_at TEXT NOT NULL,
     state TEXT NOT NULL DEFAULT 'seen',
+    source_key TEXT,
     UNIQUE (source, external_id)
 )
 """
@@ -65,6 +66,8 @@ class JobStore(AbstractContextManager["JobStore"]):
             self.connection.execute(
                 "ALTER TABLE jobs ADD COLUMN remote_scope TEXT NOT NULL DEFAULT 'unknown'"
             )
+        if "source_key" not in columns:
+            self.connection.execute("ALTER TABLE jobs ADD COLUMN source_key TEXT")
         self.connection.commit()
 
     def close(self) -> None:
@@ -109,8 +112,9 @@ class JobStore(AbstractContextManager["JobStore"]):
                     """
                     INSERT INTO jobs (
                         source, external_id, company, title, location,
-                        work_mode, remote_scope, published_at, url, collected_at, state
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        work_mode, remote_scope, published_at, url, collected_at, state,
+                        source_key
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     ON CONFLICT(source, external_id) DO UPDATE SET
                         company = excluded.company,
                         title = excluded.title,
@@ -119,7 +123,8 @@ class JobStore(AbstractContextManager["JobStore"]):
                         remote_scope = excluded.remote_scope,
                         published_at = excluded.published_at,
                         url = excluded.url,
-                        state = excluded.state
+                        state = excluded.state,
+                        source_key = COALESCE(excluded.source_key, jobs.source_key)
                     """,
                     (
                         job.source,
@@ -133,6 +138,7 @@ class JobStore(AbstractContextManager["JobStore"]):
                         job.url,
                         collected_at,
                         state,
+                        job.source_key,
                     ),
                 )
         return CollectionResult(new=new_count, updated=updated_count)
@@ -142,7 +148,8 @@ class JobStore(AbstractContextManager["JobStore"]):
         rows = self.connection.execute(
             f"""
             SELECT source, external_id, company, title, location, url,
-                   work_mode, remote_scope, published_at, collected_at, state
+                   work_mode, remote_scope, published_at, collected_at, state,
+                   source_key
             FROM jobs
             {where}
             ORDER BY company COLLATE NOCASE, title COLLATE NOCASE, external_id
@@ -161,6 +168,7 @@ class JobStore(AbstractContextManager["JobStore"]):
                     remote_scope=row[7],
                     published_at=_datetime(row[8]),
                     collected_at=_datetime(row[9]),
+                    source_key=row[11],
                 ),
                 state=row[10],
             )
