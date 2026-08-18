@@ -3,6 +3,11 @@ type = "greenhouse"
 company = "Example Company"
 board_token = "examplecompany"
 
+[[sources]]
+type = "lever"
+company = "Example Lever Company"
+company_slug = "examplelevercompany"
+
 [filters]
 positive_title_keywords = [
   "devops",

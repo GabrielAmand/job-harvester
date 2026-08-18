@@ -4,12 +4,12 @@ Job Harvester will be a small, local-first CLI that collects public job offers,
 normalizes them, stores them in SQLite, and reports newly discovered listings.
 It will not require Career-Ops or any hosted service.
 
-> Status: V2.1 implemented with deterministic work-mode normalization and
-> remote-aware filtering in addition to the V2 workflow.
+> Status: V3 implemented with Greenhouse and Lever collection through one
+> normalized, deterministic pipeline.
 
-## Daily V2 workflow
+## Daily workflow
 
-Configure one or more Greenhouse boards and the relevance filters in
+Configure one or more Greenhouse and/or Lever boards and the relevance filters in
 `config.toml`, then run:
 
 ```console
@@ -34,8 +34,11 @@ The collection states describe the latest successful collection:
 
 Before each successful upsert, previous `new` and `updated` states roll over to
 `seen`. That rollover and all job writes happen in one SQLite transaction.
-Collection fetches finish before the transaction starts, so a network or source
-failure leaves the previous states intact. Consequently, `--new-only` always
+All source fetches finish before the transaction starts. A network, parsing, or
+source failure aborts the entire run and leaves the database and its previous
+states intact. Successful sources do not commit independently because that would
+make the shared latest-collection state describe different runs. Consequently,
+`--new-only` always
 means jobs first discovered by the latest successful `collect`; running
 `collect` twice makes the second run's new set empty. Existing V1 databases are
 migrated automatically, with their existing rows initialized as `seen` and
@@ -77,8 +80,11 @@ An absent or empty positive list matches no jobs. This prevents an incomplete
 filter configuration from exporting every stored listing accidentally.
 
 Work mode is normalized as `remote`, `hybrid`, `onsite`, or `unknown`. Remote
-scope is `france`, `europe`, `worldwide`, `restricted`, or `unknown`. Greenhouse
-does not expose a standard work-mode field, so Job Harvester conservatively
+scope is `france`, `europe`, `worldwide`, `restricted`, or `unknown`. Lever's
+structured `workplaceType` is authoritative when explicit, with structured
+locations used for scope; `unspecified` falls back to explicit title, location,
+and description wording. Greenhouse does not expose a standard work-mode field,
+so Job Harvester conservatively
 checks exposed work-mode metadata, title/location, offices, and finally explicit
 phrases in the job description. Matching is boundary-aware and accent-insensitive;
 vague technical text such as “hybrid cloud” or “distributed systems” is ignored.
@@ -124,14 +130,16 @@ performed in V2.
 
 ## Collection
 
-The first milestone deliberately supports one path: one or more configured
-Greenhouse job boards fetched by one CLI command.
+One CLI command fetches every configured Greenhouse and Lever board through
+their public JSON APIs, normalizes all jobs, and writes them atomically.
 
 ```console
 cp config.example.toml config.toml
-# Set one company's name and Greenhouse board token in config.toml.
+# Set real company names and public board identifiers in config.toml.
 job-harvester collect --config config.toml --database jobs.sqlite3
-Found 42 jobs; 42 new; 0 updated.
+Greenhouse: Found 42; 42 new; 0 updated.
+Lever: Found 18; 18 new; 0 updated.
+Total: Found 60; 60 new; 0 updated.
 ```
 
 Running the same command again keeps the existing rows and should report zero
@@ -146,7 +154,7 @@ Python 3.11 or newer is required.
 python3 -m venv .venv
 .venv/bin/pip install -e .
 cp config.example.toml config.toml
-# Edit config.toml with a real company name and Greenhouse board token.
+# Edit config.toml with real company names and board identifiers.
 .venv/bin/job-harvester collect --config config.toml --database jobs.sqlite3
 ```
 
@@ -171,7 +179,8 @@ job-harvester/
 │   ├── storage.py         # SQLite schema and upserts
 │   └── collectors/
 │       ├── base.py        # small Collector protocol
-│       └── greenhouse.py  # Greenhouse HTTP mapping
+│       ├── greenhouse.py  # Greenhouse HTTP mapping
+│       └── lever.py       # Lever Postings API mapping
 └── tests/
     ├── fixtures/          # saved, sanitized API responses
     ├── test_greenhouse.py
@@ -181,7 +190,7 @@ job-harvester/
 The collection flow stays linear:
 
 ```text
-TOML config -> collector -> normalized Job records -> SQLite -> CLI counts
+TOML config -> source collectors -> normalized Job records -> SQLite -> CLI counts
 ```
 
 Each collector accepts source-specific configuration and returns normalized
@@ -205,7 +214,8 @@ The initial normalized record contains:
 - `collected_at` (UTC time first discovered)
 
 SQLite enforces `UNIQUE (source, external_id)`. For Greenhouse,
-`external_id` is the public job-post `id`, not `internal_job_id`. An upsert may
+`external_id` is the public job-post `id`, not `internal_job_id`. For Lever, it
+is the posting `id`. An upsert may
 refresh mutable fields such as title, location, and URL, but it must preserve
 the original `collected_at`. Whether an upsert inserted a new key determines
 the CLI's `new` count. Rows absent from a later response remain stored so that
@@ -220,6 +230,11 @@ The committed example should contain non-secret source settings only:
 type = "greenhouse"
 company = "Example Company"
 board_token = "examplecompany"
+
+[[sources]]
+type = "lever"
+company = "Example Lever Company"
+company_slug = "examplelevercompany"
 ```
 
 `config.toml` and SQLite files will be ignored by Git. Future authenticated
@@ -255,6 +270,19 @@ variables; credentials do not belong in TOML.
   while refreshing current fields; removal/closure tracking is outside this
   milestone.
 
-V2 intentionally does not add other sources, scraping, lifecycle/closure
+## Lever assumptions and risks
+
+- A company slug is the segment in `jobs.lever.co/{company_slug}`. V3 requests
+  `https://api.lever.co/v0/postings/{company_slug}?mode=json`; it does not scrape
+  HTML and requires no authentication.
+- Structured `workplaceType`, `categories.location`, `categories.allLocations`,
+  and country take priority over prose. Vague fallback evidence
+  remains `unknown`, and remote alone never implies worldwide.
+- Live responses may include `createdAt`, but creation is not necessarily
+  publication. V3 leaves `published_at` null rather than mislabeling it.
+- Lever and Greenhouse IDs may match safely because identity remains
+  `UNIQUE(source, external_id)`.
+
+V3 intentionally does not add other sources, scraping, lifecycle/closure
 tracking, scoring, an LLM, a web interface, scheduling, Docker, or Career-Ops
 integration.

@@ -1,18 +1,12 @@
 import json
-from typing import Any, Callable
+from typing import Any
 from urllib.error import HTTPError, URLError
 from urllib.parse import quote
 from urllib.request import Request, urlopen
 
+from job_harvester.collectors.base import CollectionError, Opener
 from job_harvester.models import Job
 from job_harvester.work_mode import classify_work_mode
-
-
-class CollectionError(RuntimeError):
-    """Raised when a source cannot be fetched or parsed."""
-
-
-Opener = Callable[..., Any]
 
 
 class GreenhouseCollector:

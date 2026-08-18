@@ -149,3 +149,57 @@ def classify_work_mode(raw: dict[str, Any]) -> tuple[str, str]:
         else "unknown"
     )
     return work_mode, scope
+
+
+def classify_lever_work_mode(raw: dict[str, Any]) -> tuple[str, str]:
+    """Classify Lever evidence, preferring its explicit workplace type."""
+    categories = raw.get("categories")
+    categories = categories if isinstance(categories, dict) else {}
+    location = categories.get("location")
+    all_locations = categories.get("allLocations")
+    location_parts = [location] if isinstance(location, str) else []
+    if isinstance(all_locations, list):
+        location_parts.extend(value for value in all_locations if isinstance(value, str))
+    location_text = " / ".join(dict.fromkeys(location_parts))
+
+    description_parts = [
+        raw.get("descriptionPlain"),
+        raw.get("openingPlain"),
+        raw.get("additionalPlain"),
+    ]
+    lists = raw.get("lists")
+    if isinstance(lists, list):
+        description_parts.extend(
+            item.get("content")
+            for item in lists
+            if isinstance(item, dict) and isinstance(item.get("content"), str)
+        )
+    content = " ".join(value for value in description_parts if isinstance(value, str))
+
+    structured = raw.get("workplaceType")
+    structured_modes = {"remote": "remote", "hybrid": "hybrid", "on-site": "onsite"}
+    work_mode = structured_modes.get(structured) if isinstance(structured, str) else None
+    if work_mode is None:
+        work_mode, _ = classify_work_mode(
+            {
+                "title": raw.get("text"),
+                "location": {"name": location_text},
+                "content": content,
+            }
+        )
+    evidence = _plain(
+        " ".join(
+            value
+            for value in (raw.get("text"), location_text, content)
+            if isinstance(value, str)
+        )
+    )
+    scope = (
+        _scope(evidence, _plain(location_text), work_mode)
+        if work_mode in {"remote", "hybrid"}
+        else "unknown"
+    )
+    country = raw.get("country")
+    if work_mode == "remote" and scope == "unknown" and isinstance(country, str) and country:
+        scope = "restricted"
+    return work_mode, scope

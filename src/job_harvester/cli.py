@@ -5,8 +5,10 @@ import sqlite3
 import sys
 from collections.abc import Sequence
 
-from job_harvester.collectors.greenhouse import CollectionError, GreenhouseCollector
-from job_harvester.config import ConfigError, load_config
+from job_harvester.collectors.base import CollectionError
+from job_harvester.collectors.greenhouse import GreenhouseCollector
+from job_harvester.collectors.lever import LeverCollector
+from job_harvester.config import ConfigError, GreenhouseSource, load_config
 from job_harvester.filters import is_relevant
 from job_harvester.models import StoredJob
 from job_harvester.storage import JobStore
@@ -35,12 +37,31 @@ def build_parser() -> argparse.ArgumentParser:
 
 def run_collect(config_path: Path, database_path: Path) -> int:
     config = load_config(config_path)
-    jobs = []
+    jobs_by_source: dict[str, list] = {"greenhouse": [], "lever": []}
     for source in config.sources:
-        jobs.extend(GreenhouseCollector(source.company, source.board_token).collect())
+        if isinstance(source, GreenhouseSource):
+            collected = GreenhouseCollector(source.company, source.board_token).collect()
+        else:
+            collected = LeverCollector(source.company, source.company_slug).collect()
+        jobs_by_source[source.type].extend(collected)
+    jobs = [job for source_jobs in jobs_by_source.values() for job in source_jobs]
     with JobStore(database_path) as store:
         result = store.upsert(jobs)
-    print(f"Found {len(jobs)} jobs; {result.new} new; {result.updated} updated.")
+        states = {
+            (record.job.source, record.job.external_id): record.state
+            for record in store.list_jobs()
+        }
+    for source_type, source_jobs in jobs_by_source.items():
+        if not source_jobs:
+            continue
+        unique_jobs = {(job.source, job.external_id) for job in source_jobs}
+        new = sum(states[identity] == "new" for identity in unique_jobs)
+        updated = sum(states[identity] == "updated" for identity in unique_jobs)
+        print(
+            f"{source_type.title()}: Found {len(source_jobs)}; "
+            f"{new} new; {updated} updated."
+        )
+    print(f"Total: Found {len(jobs)}; {result.new} new; {result.updated} updated.")
     return 0
 
 

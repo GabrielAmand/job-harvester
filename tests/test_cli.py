@@ -37,8 +37,30 @@ class CliTests(unittest.TestCase):
                 self.assertEqual(cli.main(arguments), 0)
         self.assertEqual(
             output.getvalue(),
-            "Found 1 jobs; 1 new; 0 updated.\nFound 1 jobs; 0 new; 0 updated.\n",
+            "Greenhouse: Found 1; 1 new; 0 updated.\n"
+            "Total: Found 1; 1 new; 0 updated.\n"
+            "Greenhouse: Found 1; 0 new; 0 updated.\n"
+            "Total: Found 1; 0 new; 0 updated.\n",
         )
+
+    def test_collects_greenhouse_and_lever_in_one_atomic_run(self) -> None:
+        self.config.write_text(
+            self.config.read_text()
+            + '[[sources]]\ntype = "lever"\ncompany = "Other"\ncompany_slug = "other"\n'
+        )
+        greenhouse = [Job("greenhouse", "same", "Acme", "Engineer", "Paris", "https://gh")]
+        lever = [Job("lever", "same", "Other", "Engineer", "Remote", "https://lever")]
+        output = io.StringIO()
+        arguments = ["collect", "--config", str(self.config), "--database", str(self.database)]
+        with patch.object(cli.GreenhouseCollector, "collect", return_value=greenhouse), \
+             patch.object(cli.LeverCollector, "collect", return_value=lever), \
+             redirect_stdout(output):
+            self.assertEqual(cli.main(arguments), 0)
+        with JobStore(self.database) as store:
+            self.assertEqual(len(store.list_jobs()), 2)
+        self.assertIn("Greenhouse: Found 1; 1 new; 0 updated.", output.getvalue())
+        self.assertIn("Lever: Found 1; 1 new; 0 updated.", output.getvalue())
+        self.assertIn("Total: Found 2; 2 new; 0 updated.", output.getvalue())
 
     def test_collect_failure_is_nonzero_and_does_not_create_database(self) -> None:
         errors = io.StringIO()
@@ -69,6 +91,20 @@ class CliTests(unittest.TestCase):
             state = store.list_jobs()[0].state
         self.assertEqual(result, 1)
         self.assertEqual(state, "new")
+
+    def test_one_source_failure_prevents_all_source_writes(self) -> None:
+        self.config.write_text(
+            self.config.read_text()
+            + '[[sources]]\ntype = "lever"\ncompany = "Other"\ncompany_slug = "other"\n'
+        )
+        greenhouse = [Job("greenhouse", "1", "Acme", "Engineer", "Paris", "https://gh")]
+        with patch.object(cli.GreenhouseCollector, "collect", return_value=greenhouse), \
+             patch.object(cli.LeverCollector, "collect", side_effect=CollectionError("failed")):
+            result = cli.main([
+                "collect", "--config", str(self.config), "--database", str(self.database)
+            ])
+        self.assertEqual(result, 1)
+        self.assertFalse(self.database.exists())
 
     def test_list_and_export_only_relevant_new_jobs(self) -> None:
         jobs = [

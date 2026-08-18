@@ -2,7 +2,7 @@ from pathlib import Path
 import tempfile
 import unittest
 
-from job_harvester.config import ConfigError, load_config
+from job_harvester.config import ConfigError, LeverSource, load_config
 
 
 class ConfigTests(unittest.TestCase):
@@ -40,10 +40,22 @@ class ConfigTests(unittest.TestCase):
         self.assertTrue(filters.allow_hybrid)
         self.assertFalse(filters.allow_onsite)
 
+    def test_loads_mixed_greenhouse_and_lever_sources(self) -> None:
+        path = self.directory / "config.toml"
+        path.write_text(
+            '[[sources]]\ntype = "greenhouse"\ncompany = "Acme"\nboard_token = "acme"\n'
+            '[[sources]]\ntype = "lever"\ncompany = "Other"\ncompany_slug = "other"\n'
+        )
+        config = load_config(path)
+        self.assertEqual(len(config.sources), 2)
+        self.assertIsInstance(config.sources[1], LeverSource)
+        self.assertEqual(config.sources[1].company_slug, "other")  # type: ignore[union-attr]
+
     def test_rejects_invalid_configuration(self) -> None:
         cases = [
             ("", "at least one"),
-            ('[[sources]]\ntype = "lever"\ncompany = "Acme"\n', "unsupported"),
+            ('[[sources]]\ntype = "lever"\ncompany = "Acme"\n', "company_slug"),
+            ('[[sources]]\ntype = "other"\ncompany = "Acme"\n', "unsupported"),
             ('[[sources]]\ntype = "greenhouse"\ncompany = "Acme"\n', "board_token"),
             (
                 '[[sources]]\ntype = "greenhouse"\ncompany = "Acme"\nboard_token = "a"\n'

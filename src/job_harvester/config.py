@@ -15,6 +15,13 @@ class GreenhouseSource:
 
 
 @dataclass(frozen=True, slots=True)
+class LeverSource:
+    company: str
+    company_slug: str
+    type: str = "lever"
+
+
+@dataclass(frozen=True, slots=True)
 class Filters:
     positive_title_keywords: tuple[str, ...] = ()
     negative_title_keywords: tuple[str, ...] = ()
@@ -26,7 +33,7 @@ class Filters:
 
 @dataclass(frozen=True, slots=True)
 class Config:
-    sources: tuple[GreenhouseSource, ...]
+    sources: tuple[GreenhouseSource | LeverSource, ...]
     filters: Filters
 
 
@@ -71,19 +78,30 @@ def load_config(path: str | Path) -> Config:
     if not isinstance(raw_sources, list) or not raw_sources:
         raise ConfigError("configuration must contain at least one [[sources]] entry")
 
-    sources: list[GreenhouseSource] = []
+    sources: list[GreenhouseSource | LeverSource] = []
     for index, raw in enumerate(raw_sources):
         if not isinstance(raw, dict):
             raise ConfigError(f"sources[{index}] must be a table")
         source_type = _nonempty_string(raw.get("type"), "type", index)
-        if source_type != "greenhouse":
-            raise ConfigError(f"sources[{index}].type is unsupported: {source_type}")
-        sources.append(
-            GreenhouseSource(
-                company=_nonempty_string(raw.get("company"), "company", index),
-                board_token=_nonempty_string(raw.get("board_token"), "board_token", index),
+        company = _nonempty_string(raw.get("company"), "company", index)
+        if source_type == "greenhouse":
+            sources.append(
+                GreenhouseSource(
+                    company=company,
+                    board_token=_nonempty_string(raw.get("board_token"), "board_token", index),
+                )
             )
-        )
+        elif source_type == "lever":
+            sources.append(
+                LeverSource(
+                    company=company,
+                    company_slug=_nonempty_string(
+                        raw.get("company_slug"), "company_slug", index
+                    ),
+                )
+            )
+        else:
+            raise ConfigError(f"sources[{index}].type is unsupported: {source_type}")
     raw_filters = document.get("filters", {})
     if not isinstance(raw_filters, dict):
         raise ConfigError("filters must be a table")

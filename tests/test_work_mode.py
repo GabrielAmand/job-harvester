@@ -1,6 +1,6 @@
 import unittest
 
-from job_harvester.work_mode import classify_work_mode
+from job_harvester.work_mode import classify_lever_work_mode, classify_work_mode
 
 
 def classify(
@@ -83,4 +83,43 @@ class WorkModeTests(unittest.TestCase):
         self.assertEqual(
             classify(content="This is a home-based position."),
             ("remote", "unknown"),
+        )
+
+    def test_lever_structured_workplace_type_has_priority(self) -> None:
+        self.assertEqual(
+            classify_lever_work_mode({
+                "text": "On-site Engineer",
+                "categories": {"location": "Remote - US"},
+                "workplaceType": "remote",
+                "descriptionPlain": "Work in the office.",
+            }),
+            ("remote", "restricted"),
+        )
+        self.assertEqual(
+            classify_lever_work_mode({
+                "text": "Engineer",
+                "categories": {"location": "Remote"},
+                "workplaceType": "remote",
+            }),
+            ("remote", "unknown"),
+        )
+        self.assertEqual(
+            classify_lever_work_mode({
+                "text": "Engineer",
+                "categories": {"location": "Remote"},
+                "country": "US",
+                "workplaceType": "remote",
+            }),
+            ("remote", "restricted"),
+        )
+
+    def test_lever_unspecified_falls_back_conservatively(self) -> None:
+        self.assertEqual(
+            classify_lever_work_mode({
+                "text": "Engineer",
+                "categories": {"location": "Paris"},
+                "workplaceType": "unspecified",
+                "descriptionPlain": "This is a hybrid role.",
+            }),
+            ("hybrid", "unknown"),
         )

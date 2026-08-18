@@ -1,0 +1,28 @@
+[
+  {
+    "id": "lever-123",
+    "text": "Platform Engineer",
+    "categories": {
+      "location": "Remote - US",
+      "allLocations": ["Remote - US"],
+      "team": "Engineering",
+      "commitment": "Full-time"
+    },
+    "workplaceType": "remote",
+    "country": "US",
+    "descriptionPlain": "Join our platform team.",
+    "hostedUrl": "https://jobs.lever.co/acme/lever-123",
+    "createdAt": 1767225600000
+  },
+  {
+    "id": "lever-124",
+    "text": "Site Reliability Engineer",
+    "categories": {
+      "location": "Paris, France",
+      "allLocations": ["Paris, France"]
+    },
+    "workplaceType": "hybrid",
+    "descriptionPlain": "A hybrid role in our Paris office.",
+    "hostedUrl": "https://jobs.lever.co/acme/lever-124"
+  }
+]
