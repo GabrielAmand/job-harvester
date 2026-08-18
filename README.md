@@ -4,9 +4,104 @@ Job Harvester will be a small, local-first CLI that collects public job offers,
 normalizes them, stores them in SQLite, and reports newly discovered listings.
 It will not require Career-Ops or any hosted service.
 
-> Status: V1 implemented with Greenhouse collection and local SQLite storage.
+> Status: V2 implemented with relevance filtering, collection state, terminal
+> inspection, and JSON export.
 
-## First milestone
+## Daily V2 workflow
+
+Configure one or more Greenhouse boards and the relevance filters in
+`config.toml`, then run:
+
+```console
+job-harvester collect --config config.toml --database jobs.sqlite3
+job-harvester list --config config.toml --database jobs.sqlite3 --new-only
+job-harvester export --config config.toml --database jobs.sqlite3 --new-only \
+  --output new-relevant-jobs.json
+```
+
+`collect` fetches and stores every listing. `list` and `export` apply the
+configured filters when reading SQLite; irrelevant jobs remain stored and can
+become relevant after filter changes. Omit `--new-only` to inspect or export
+all currently relevant stored jobs.
+
+The collection states describe the latest successful collection:
+
+- `new`: the identity was first discovered in that collection;
+- `updated`: a previously stored job changed title, company, location, remote
+  status, publication time, or URL in that collection;
+- `seen`: the job existed before and its stored source fields did not change in
+  that collection.
+
+Before each successful upsert, previous `new` and `updated` states roll over to
+`seen`. That rollover and all job writes happen in one SQLite transaction.
+Collection fetches finish before the transaction starts, so a network or source
+failure leaves the previous states intact. Consequently, `--new-only` always
+means jobs first discovered by the latest successful `collect`; running
+`collect` twice makes the second run's new set empty. Existing V1 databases are
+migrated automatically, with their existing rows initialized as `seen` and
+their original `collected_at` values preserved.
+
+## Filtering
+
+Matching is deterministic, case-insensitive literal substring matching. A job
+must match at least one positive title keyword, must not match any negative
+title keyword, and must match a location keyword when that optional list is not
+empty. Negative matches take precedence. `senior` is not rejected by default.
+
+```toml
+[filters]
+positive_title_keywords = [
+  "devops",
+  "cloud",
+  "platform",
+  "infrastructure",
+  "linux",
+  "site reliability",
+  "sre",
+  "systems engineer",
+  "production engineer",
+  "automation",
+  "ci/cd",
+]
+negative_title_keywords = [
+  "director",
+  "head of",
+  "vice president",
+  "principal",
+  "staff engineer",
+]
+location_keywords = ["france", "remote"] # optional; [] accepts all locations
+```
+
+An absent or empty positive list matches no jobs. This prevents an incomplete
+filter configuration from exporting every stored listing accidentally.
+
+## JSON export
+
+`export` writes a UTF-8 JSON array to standard output, or to the path supplied
+with `--output`. Records are sorted case-insensitively by company and title,
+then by external ID. Each object has this stable, intentionally flat shape:
+
+```json
+{
+  "source": "greenhouse",
+  "external_id": "123",
+  "company": "Example Company",
+  "title": "Platform Engineer",
+  "location": "Paris, France",
+  "remote_status": null,
+  "published_at": null,
+  "url": "https://boards.greenhouse.io/example/jobs/123",
+  "collected_at": "2026-08-18T08:00:00+00:00",
+  "state": "new"
+}
+```
+
+Timestamps are ISO 8601 strings in UTC when present. The array can be consumed
+directly by Codex or another downstream tool; no Career-Ops integration is
+performed in V2.
+
+## Collection
 
 The first milestone deliberately supports one path: one or more configured
 Greenhouse job boards fetched by one CLI command.
@@ -15,7 +110,7 @@ Greenhouse job boards fetched by one CLI command.
 cp config.example.toml config.toml
 # Set one company's name and Greenhouse board token in config.toml.
 job-harvester collect --config config.toml --database jobs.sqlite3
-Found 42 jobs; 42 new.
+Found 42 jobs; 42 new; 0 updated.
 ```
 
 Running the same command again keeps the existing rows and should report zero
@@ -40,7 +135,7 @@ Run the dependency-free test suite from a source checkout with:
 PYTHONPATH=src python3 -m unittest discover -s tests -v
 ```
 
-## V1 structure
+## Project structure
 
 ```text
 job-harvester/
@@ -50,6 +145,7 @@ job-harvester/
 ├── src/job_harvester/
 │   ├── cli.py             # argument parsing and run summary
 │   ├── config.py          # TOML loading and validation
+│   ├── filters.py         # deterministic relevance matching
 │   ├── models.py          # normalized Job value object
 │   ├── storage.py         # SQLite schema and upserts
 │   └── collectors/
@@ -61,7 +157,7 @@ job-harvester/
     └── test_storage.py
 ```
 
-The execution flow stays linear:
+The collection flow stays linear:
 
 ```text
 TOML config -> collector -> normalized Job records -> SQLite -> CLI counts
@@ -137,17 +233,6 @@ variables; credentials do not belong in TOML.
   while refreshing current fields; removal/closure tracking is outside this
   milestone.
 
-## Incremental implementation plan
-
-1. **Project skeleton:** add packaging, console entry point, `.gitignore`, an
-   example TOML file, config validation, and CLI help.
-2. **Greenhouse normalization:** implement the HTTP client and mapping with a
-   saved response fixture and tests for missing optional fields and bad payloads.
-3. **SQLite persistence:** create the jobs table and tested idempotent upsert
-   behavior that preserves `collected_at` and returns the new-row count.
-4. **End-to-end command:** connect config, collector, and storage; print
-   `found`/`new`; cover failure exit codes; perform one documented live smoke
-   test against a known public board.
-
-Lever, France Travail, URL export, filtering, closed-listing detection, and
-Career-Ops integration follow only after this milestone works end to end.
+V2 intentionally does not add other sources, scraping, lifecycle/closure
+tracking, scoring, an LLM, a web interface, scheduling, Docker, or Career-Ops
+integration.

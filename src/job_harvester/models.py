@@ -20,3 +20,9 @@ class Job:
 
     def discovered_at(self) -> datetime:
         return self.collected_at or utc_now()
+
+
+@dataclass(frozen=True, slots=True)
+class StoredJob:
+    job: Job
+    state: str

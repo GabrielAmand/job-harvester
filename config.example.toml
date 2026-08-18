@@ -2,3 +2,27 @@
 type = "greenhouse"
 company = "Example Company"
 board_token = "examplecompany"
+
+[filters]
+positive_title_keywords = [
+  "devops",
+  "cloud",
+  "platform",
+  "infrastructure",
+  "linux",
+  "site reliability",
+  "sre",
+  "systems engineer",
+  "production engineer",
+  "automation",
+  "ci/cd",
+]
+negative_title_keywords = [
+  "director",
+  "head of",
+  "vice president",
+  "principal",
+  "staff engineer",
+]
+# Omit or leave empty to accept every location.
+location_keywords = []

@@ -15,14 +15,35 @@ class GreenhouseSource:
 
 
 @dataclass(frozen=True, slots=True)
+class Filters:
+    positive_title_keywords: tuple[str, ...] = ()
+    negative_title_keywords: tuple[str, ...] = ()
+    location_keywords: tuple[str, ...] = ()
+
+
+@dataclass(frozen=True, slots=True)
 class Config:
     sources: tuple[GreenhouseSource, ...]
+    filters: Filters
 
 
 def _nonempty_string(value: object, field: str, index: int) -> str:
     if not isinstance(value, str) or not value.strip():
         raise ConfigError(f"sources[{index}].{field} must be a non-empty string")
     return value.strip()
+
+
+def _keyword_list(raw: object, field: str) -> tuple[str, ...]:
+    if raw is None:
+        return ()
+    if not isinstance(raw, list):
+        raise ConfigError(f"filters.{field} must be an array of strings")
+    keywords: list[str] = []
+    for index, value in enumerate(raw):
+        if not isinstance(value, str) or not value.strip():
+            raise ConfigError(f"filters.{field}[{index}] must be a non-empty string")
+        keywords.append(value.strip())
+    return tuple(keywords)
 
 
 def load_config(path: str | Path) -> Config:
@@ -52,4 +73,18 @@ def load_config(path: str | Path) -> Config:
                 board_token=_nonempty_string(raw.get("board_token"), "board_token", index),
             )
         )
-    return Config(tuple(sources))
+    raw_filters = document.get("filters", {})
+    if not isinstance(raw_filters, dict):
+        raise ConfigError("filters must be a table")
+    filters = Filters(
+        positive_title_keywords=_keyword_list(
+            raw_filters.get("positive_title_keywords"), "positive_title_keywords"
+        ),
+        negative_title_keywords=_keyword_list(
+            raw_filters.get("negative_title_keywords"), "negative_title_keywords"
+        ),
+        location_keywords=_keyword_list(
+            raw_filters.get("location_keywords"), "location_keywords"
+        ),
+    )
+    return Config(tuple(sources), filters)
