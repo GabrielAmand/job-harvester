@@ -19,6 +19,7 @@ from job_harvester.applications import (
     mark_applied,
     synchronize_evaluation,
 )
+from job_harvester.application_session import render_card, run_session
 from job_harvester.collectors.base import CollectionError
 from job_harvester.collectors.france_travail import FranceTravailCollector
 from job_harvester.collectors.greenhouse import GreenhouseCollector
@@ -110,6 +111,8 @@ def build_parser() -> argparse.ArgumentParser:
         dest="application_command", required=True
     )
     application_commands.add_parser("list", help="show jobs needing application action")
+    application_commands.add_parser("session", help="process applications interactively")
+    application_commands.add_parser("next", help="show the next application candidate")
     decide = application_commands.add_parser("decide", help="decide a needs-review job")
     decide.add_argument("job_id", type=int)
     decide.add_argument("decision", choices=("apply", "skip"))
@@ -400,6 +403,21 @@ def _artifact_path(repository: Path | None, value: str | None) -> str:
 def run_application(args: argparse.Namespace) -> int:
     config = load_config(args.config)
     repository = config.career_ops.repository_path
+    if args.application_command == "session":
+        return run_session(
+            args.database, config.career_ops, output=sys.stdout
+        )
+    if args.application_command == "next":
+        with ApplicationStore(args.database) as store:
+            applications = store.list_session()
+        if not applications:
+            print("No applications currently require action.")
+            return 0
+        render_card(
+            args.database, config.career_ops, applications[0], 1,
+            len(applications), sys.stdout,
+        )
+        return 0
     if args.application_command == "list":
         with ApplicationStore(args.database) as store:
             applications = store.list_active()

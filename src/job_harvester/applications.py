@@ -35,6 +35,7 @@ class Application:
     url: str
     score: float | None
     category: str
+    recommendation: str
     tracker_id: int | None
     report_path: str | None
     cv_pdf_path: str | None
@@ -154,6 +155,27 @@ class ApplicationStore(AbstractContextManager["ApplicationStore"]):
         ).fetchall()
         return [_application(row) for row in rows]
 
+    def list_session(self) -> list[Application]:
+        """Return a stable snapshot of applications requiring human action."""
+        rows = self.connection.execute(
+            _APPLICATION_QUERY
+            + " WHERE a.state IN ('needs_review', 'ready_to_apply') "
+              "AND NOT EXISTS (SELECT 1 FROM job_reviews r "
+              "WHERE r.job_id=j.id AND r.review_state='expired') "
+              "ORDER BY CASE "
+              "WHEN a.state='ready_to_apply' AND e.career_ops_category='priority_candidate' THEN 0 "
+              "WHEN a.state='ready_to_apply' AND e.career_ops_category='good_candidate' THEN 1 "
+              "WHEN a.state='ready_to_apply' THEN 2 ELSE 3 END, "
+              "e.career_ops_score DESC, e.career_ops_evaluated_at, j.id"
+        ).fetchall()
+        return [_application(row) for row in rows]
+
+    def is_expired(self, job_id: int) -> bool:
+        row = self.connection.execute(
+            "SELECT review_state FROM job_reviews WHERE job_id=?", (job_id,)
+        ).fetchone()
+        return row is not None and row[0] == "expired"
+
     def initialize_evaluation(self, job_id: int, category: str) -> str:
         target = {
             "automatic_skip": "not_started",
@@ -196,14 +218,31 @@ class ApplicationStore(AbstractContextManager["ApplicationStore"]):
             raise ApplicationError(
                 f"job {job_id} is {application.state}, not needs_review"
             )
+        if decision == "skip":
+            self.decline(job_id)
+            return
         now = _timestamp(datetime.now(timezone.utc))
-        target = "declined" if decision == "skip" else "not_started"
         with self.connection:
             self.connection.execute(
                 "UPDATE applications SET decision=?, decided_at=?, updated_at=? WHERE job_id=?",
                 (decision, now, now, job_id),
             )
-            self._transition(job_id, target, f"user decided {decision}")
+            self._transition(job_id, "not_started", "user decided apply")
+
+    def decline(self, job_id: int) -> None:
+        application = self.get(job_id)
+        if application.state not in {"needs_review", "ready_to_apply"}:
+            raise ApplicationError(
+                f"job {job_id} is {application.state}, not eligible for decline"
+            )
+        now = _timestamp(datetime.now(timezone.utc))
+        with self.connection:
+            self.connection.execute(
+                "UPDATE applications SET decision='skip', decided_at=?, updated_at=? "
+                "WHERE job_id=?",
+                (now, now, job_id),
+            )
+            self._transition(job_id, "declined", "user decided skip")
 
     def reopen(self, job_id: int) -> None:
         application = self.get(job_id)
@@ -307,7 +346,8 @@ class ApplicationStore(AbstractContextManager["ApplicationStore"]):
 
 _APPLICATION_QUERY = """
 SELECT j.id, a.state, a.decision, j.company, j.title, j.source, j.url,
-       e.career_ops_score, e.career_ops_category, e.career_ops_tracker_id,
+       e.career_ops_score, e.career_ops_category, e.career_ops_recommendation,
+       e.career_ops_tracker_id,
        e.career_ops_report_path, e.career_ops_cv_pdf_path, a.state_reason,
        a.applied_at
 FROM applications a JOIN jobs j ON j.id=a.job_id
@@ -321,11 +361,12 @@ def _application(row: tuple[object, ...]) -> Application:
         decision=str(row[2]) if row[2] is not None else None,
         company=str(row[3]), title=str(row[4]), source=str(row[5]), url=str(row[6]),
         score=float(row[7]) if row[7] is not None else None, category=str(row[8]),
-        tracker_id=int(row[9]) if row[9] is not None else None,
-        report_path=str(row[10]) if row[10] is not None else None,
-        cv_pdf_path=str(row[11]) if row[11] is not None else None,
-        state_reason=str(row[12]) if row[12] is not None else None,
-        applied_at=_datetime(str(row[13])) if row[13] is not None else None,
+        recommendation=str(row[9]),
+        tracker_id=int(row[10]) if row[10] is not None else None,
+        report_path=str(row[11]) if row[11] is not None else None,
+        cv_pdf_path=str(row[12]) if row[12] is not None else None,
+        state_reason=str(row[13]) if row[13] is not None else None,
+        applied_at=_datetime(str(row[14])) if row[14] is not None else None,
     )
 
 

@@ -7,6 +7,7 @@ import sqlite3
 import subprocess
 import tempfile
 import unittest
+from unittest.mock import patch
 
 from job_harvester.applications import (
     ApplicationError,
@@ -15,12 +16,13 @@ from job_harvester.applications import (
     synchronize_evaluation,
 )
 from job_harvester.batches import BatchStore, start_batch
-from job_harvester.career_ops import CareerOpsEvaluation, _persist_evaluation
+from job_harvester.career_ops import CareerOpsError, CareerOpsEvaluation, _persist_evaluation
 from job_harvester.config import CareerOpsConfig, Filters
 from job_harvester.models import Job
 from job_harvester.revalidation import RevalidationError
 from job_harvester.storage import JobStore
 from job_harvester import cli
+from job_harvester import application_session
 
 
 class Revalidator:
@@ -261,6 +263,144 @@ class ApplicationTests(unittest.TestCase):
         self.assertIn("PRIORITY\n", output.getvalue())
         self.assertIn("NEEDS REVIEW\n", output.getvalue())
         self.assertIn("output/acme.pdf", output.getvalue())
+
+    def test_session_snapshot_excludes_ineligible_and_orders_stably(self) -> None:
+        automatic = self.add_job("1")
+        declined = self.add_job("2")
+        applied = self.add_job("3")
+        review = self.add_job("4")
+        good = self.add_job("5")
+        priority = self.add_job("6")
+        cv = self.make_cv()
+        self.evaluate(automatic, "automatic_skip")
+        self.evaluate(declined, "review")
+        self.evaluate(applied, "good_candidate", cv=cv)
+        self.evaluate(review, "review")
+        self.evaluate(good, "good_candidate", cv=cv)
+        self.evaluate(priority, "priority_candidate", cv=cv)
+        synchronize_evaluation(self.database, self.config, automatic)
+        synchronize_evaluation(self.database, self.config, declined)
+        synchronize_evaluation(self.database, self.config, review)
+        for job_id in (applied, good, priority):
+            synchronize_evaluation(
+                self.database, self.config, job_id, revalidator=Revalidator()
+            )
+        with ApplicationStore(self.database) as store:
+            store.decline(declined)
+            store.mark_applied(applied)
+            first = [item.job_id for item in store.list_session()]
+            second = [item.job_id for item in store.list_session()]
+        self.assertEqual(first, [priority, good, review])
+        self.assertEqual(second, first)
+
+    def test_session_open_next_and_quit_do_not_mutate(self) -> None:
+        first, second = self.add_job("1"), self.add_job("2")
+        self.evaluate(first, "review")
+        self.evaluate(second, "review")
+        synchronize_evaluation(self.database, self.config, first)
+        synchronize_evaluation(self.database, self.config, second)
+        actions = iter(("o", "r", "c", "n", "q"))
+        opened: list[str] = []
+        output = io.StringIO()
+        application_session.run_session(
+            self.database, self.config,
+            input_fn=lambda prompt: next(actions), output=output,
+            opener=lambda target: opened.append(str(target)) or True,
+        )
+        with ApplicationStore(self.database) as store:
+            self.assertEqual(store.get(first).state, "needs_review")
+            self.assertEqual(store.get(second).state, "needs_review")
+        self.assertEqual(len(opened), 2)
+        self.assertIn("CV: unavailable", output.getvalue())
+        self.assertIn("Deferred: 1", output.getvalue())
+
+    def test_needs_review_apply_prepares_without_marking_applied(self) -> None:
+        job_id = self.add_job()
+        self.evaluate(job_id, "review")
+        synchronize_evaluation(self.database, self.config, job_id)
+        actions = iter(("a", "q"))
+
+        def prepare(database, config, selected):
+            with ApplicationStore(database) as store:
+                store.transition(selected, "ready_to_apply", "test preparation")
+                return store.get(selected)
+
+        with patch.object(application_session, "_prepare", side_effect=prepare):
+            application_session.run_session(
+                self.database, self.config, input_fn=lambda prompt: next(actions),
+                output=io.StringIO(), opener=lambda target: True,
+            )
+        with ApplicationStore(self.database) as store:
+            item = store.get(job_id)
+        self.assertEqual(item.state, "ready_to_apply")
+        self.assertIsNone(item.applied_at)
+
+    def test_preparation_failure_keeps_application_unapplied(self) -> None:
+        job_id = self.add_job()
+        self.evaluate(job_id, "review")
+        synchronize_evaluation(self.database, self.config, job_id)
+        actions = iter(("a", "q"))
+        with patch.object(
+            application_session, "_prepare", side_effect=CareerOpsError("temporary")
+        ):
+            application_session.run_session(
+                self.database, self.config, input_fn=lambda prompt: next(actions),
+                output=io.StringIO(), opener=lambda target: True,
+            )
+        with ApplicationStore(self.database) as store:
+            item = store.get(job_id)
+        self.assertNotEqual(item.state, "applied")
+        self.assertIsNone(item.applied_at)
+
+    def test_ready_session_requires_confirmation_then_advances(self) -> None:
+        selected, following = self.add_job("1"), self.add_job("2")
+        cv = self.make_cv()
+        self.evaluate(selected, "priority_candidate", cv=cv)
+        self.evaluate(following, "review")
+        synchronize_evaluation(
+            self.database, self.config, selected, revalidator=Revalidator()
+        )
+        synchronize_evaluation(self.database, self.config, following)
+        actions = iter(("a", "y", "q"))
+
+        def apply(database, config, job_id):
+            return mark_applied(
+                database, config, job_id, revalidator=Revalidator(),
+                runner=lambda command, **kwargs: subprocess.CompletedProcess(
+                    command, 0, "", ""
+                ),
+            )
+
+        output = io.StringIO()
+        with patch.object(application_session, "mark_applied", side_effect=apply):
+            application_session.run_session(
+                self.database, self.config, input_fn=lambda prompt: next(actions),
+                output=output, opener=lambda target: True,
+            )
+        with ApplicationStore(self.database) as store:
+            self.assertEqual(store.get(selected).state, "applied")
+            self.assertEqual(store.get(following).state, "needs_review")
+        self.assertIn(f"#%d" % following, output.getvalue())
+
+    def test_ready_session_can_be_explicitly_declined(self) -> None:
+        job_id = self.add_job()
+        cv = self.make_cv()
+        self.evaluate(job_id, "good_candidate", cv=cv)
+        synchronize_evaluation(
+            self.database, self.config, job_id, revalidator=Revalidator()
+        )
+        application_session.run_session(
+            self.database, self.config, input_fn=lambda prompt: "s",
+            output=io.StringIO(), opener=lambda target: True,
+        )
+        with ApplicationStore(self.database) as store:
+            item = store.get(job_id)
+            event = store.connection.execute(
+                "SELECT from_state, to_state FROM application_events "
+                "WHERE job_id=? ORDER BY id DESC LIMIT 1", (job_id,),
+            ).fetchone()
+        self.assertEqual((item.state, item.decision), ("declined", "skip"))
+        self.assertEqual(event, ("ready_to_apply", "declined"))
 
 
 if __name__ == "__main__":

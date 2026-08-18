@@ -5,8 +5,9 @@ normalizes them, stores them in SQLite, and reports newly discovered listings.
 Collection does not require Career-Ops or any hosted service. Evaluation and
 application-artifact preparation can optionally use a local Career-Ops checkout.
 
-> Status: V9 implemented with read-only Gmail ingestion after the persistent,
-> human-approved application workflow. Job Harvester never sends email.
+> Status: V10 implemented with an interactive, human-controlled application
+> session. Gmail ingestion remains read-only; Job Harvester never submits forms
+> or sends email.
 
 ## Collection workflow
 
@@ -128,6 +129,8 @@ the Career-Ops evaluation category. V8 never submits a form. It tracks only
 
 ```console
 job-harvester application --database jobs.sqlite3 --config config.toml list
+job-harvester application --database jobs.sqlite3 --config config.toml next
+job-harvester application --database jobs.sqlite3 --config config.toml session
 job-harvester application --database jobs.sqlite3 --config config.toml decide 59 apply
 job-harvester application --database jobs.sqlite3 --config config.toml decide 72 skip
 job-harvester application --database jobs.sqlite3 --config config.toml prepare 59
@@ -135,6 +138,12 @@ job-harvester application --database jobs.sqlite3 --config config.toml reopen 72
 job-harvester application --database jobs.sqlite3 --config config.toml open 59
 job-harvester application --database jobs.sqlite3 --config config.toml mark-applied 59
 ```
+
+`session` takes a stable snapshot of eligible work, shows one opportunity at a
+time, and can open or print the stored job URL, CV, and report. Opening artifacts
+never changes state. A review decision may prepare artifacts but does not mean
+the application was submitted; only the separately confirmed `Applied` action
+records an application. `next` defers an item for the current session only.
 
 Automatic skips remain outside the application queue. Review results wait for
 an explicit `decide`. Good and priority candidates become ready only when the
