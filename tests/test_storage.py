@@ -169,3 +169,13 @@ class StorageTests(unittest.TestCase):
             record = store.list_jobs()[0]
         self.assertEqual(result.updated, 1)
         self.assertEqual((record.job.work_mode, record.job.remote_scope), ("remote", "france"))
+
+    def test_full_remote_signal_is_persisted_as_a_meaningful_update(self) -> None:
+        with JobStore(self.database) as store:
+            store.upsert([make_job(work_mode="remote", remote_scope="france")])
+            result = store.upsert([
+                make_job(work_mode="remote", remote_scope="france", full_remote=True)
+            ])
+            record = store.list_jobs()[0]
+        self.assertEqual(result.updated, 1)
+        self.assertTrue(record.job.full_remote)

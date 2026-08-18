@@ -112,7 +112,7 @@ class BatchStore(AbstractContextManager["BatchStore"]):
             """
             SELECT bj.position, j.source, j.external_id, j.company, j.title,
                    j.location, j.url, j.work_mode, j.remote_scope,
-                   j.published_at, j.collected_at, j.source_key,
+                   j.published_at, j.collected_at, j.source_key, j.full_remote,
                    COALESCE(r.review_state, 'pending'), r.decision
             FROM batch_jobs bj
             JOIN jobs j ON j.id = bj.job_id
@@ -129,8 +129,9 @@ class BatchStore(AbstractContextManager["BatchStore"]):
                     location=row[5], url=row[6], work_mode=row[7],
                     remote_scope=row[8], published_at=_datetime(row[9]),
                     collected_at=_datetime(row[10]), source_key=row[11],
+                    full_remote=bool(row[12]),
                 ),
-                review_state=row[12], decision=row[13],
+                review_state=row[13], decision=row[14],
             )
             for row in rows
         ]
@@ -323,13 +324,11 @@ def start_batch(
 
 
 def _candidate_key(job: Job) -> tuple[object, ...]:
-    mode = {"remote": 0, "hybrid": 1, "unknown": 2, "onsite": 3}.get(
-        job.work_mode, 2
-    )
+    category = _priority_category(job)
     published = job.published_at.timestamp() if job.published_at else 0.0
     collected = job.discovered_at().timestamp()
     return (
-        mode,
+        category[0],
         job.published_at is None,
         -published,
         -collected,
@@ -338,6 +337,26 @@ def _candidate_key(job: Job) -> tuple[object, ...]:
         job.title.casefold(),
         job.external_id,
     )
+
+
+def _priority_category(job: Job) -> tuple[int, str]:
+    scope = job.remote_scope if job.remote_scope in {
+        "france", "europe", "worldwide", "unknown", "restricted"
+    } else "unknown"
+    if job.work_mode == "remote":
+        if job.full_remote and scope != "restricted":
+            ranks = {"france": 1, "europe": 2, "worldwide": 3, "unknown": 4}
+            return ranks[scope], f"full_remote_{scope}"
+        ranks = {
+            "france": 5, "europe": 6, "worldwide": 7,
+            "unknown": 8, "restricted": 9,
+        }
+        return ranks[scope], f"remote_{scope}"
+    if job.work_mode == "hybrid":
+        return 10, "hybrid"
+    if job.work_mode == "onsite":
+        return 12, "onsite"
+    return 11, "unknown"
 
 
 def _batch(row: tuple[object, ...]) -> Batch:

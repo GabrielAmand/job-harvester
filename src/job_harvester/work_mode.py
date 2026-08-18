@@ -27,11 +27,12 @@ def _plain(value: str) -> str:
 
 REMOTE = re.compile(
     r"\b(?:fully remote|full remote|remote[- ]first|work(?:ing)? from home|wfh|"
-    r"home[- ]based|distributed|100 ?% (?:remote|teletravail)|teletravail|a distance|remote)\b"
+    r"home[- ]based|distributed|work from anywhere|100 ?% (?:remote|teletravail)|"
+    r"teletravail|a distance|remote)\b"
 )
 DESCRIPTION_REMOTE = re.compile(
     r"\b(?:fully remote|full remote|remote[- ]first|work(?:ing)? from home|wfh|"
-    r"home[- ]based|100 ?% (?:remote|teletravail)|teletravail|a distance|"
+    r"home[- ]based|work from anywhere|100 ?% (?:remote|teletravail)|teletravail|a distance|"
     r"remote (?:role|position|job|work|team)|work remotely|distributed (?:team|workforce|company))\b"
 )
 HYBRID = re.compile(r"\b(?:hybrid|hybride|remote[- ]friendly)\b")
@@ -44,6 +45,11 @@ DESCRIPTION_HYBRID = re.compile(
 DESCRIPTION_ONSITE = re.compile(
     r"\b(?:on[- ]?site (?:role|position|job|work)|work on[- ]?site|sur site|"
     r"presentiel|office[- ]based)\b"
+)
+FULL_REMOTE = re.compile(
+    r"\b(?:fully remote|full remote|100 ?% (?:remote|teletravail)|"
+    r"fully distributed (?:team|workforce|company|organisation|organization|role)|"
+    r"work from anywhere(?: in the world)?)\b"
 )
 
 
@@ -125,7 +131,7 @@ def _scope(text: str, location: str, work_mode: str) -> str:
     return "unknown"
 
 
-def classify_work_mode(raw: dict[str, Any]) -> tuple[str, str]:
+def classify_work_mode(raw: dict[str, Any]) -> tuple[str, str, bool]:
     """Classify only explicit Greenhouse job-post evidence, by source priority."""
     location = raw.get("location")
     location_name = location.get("name") if isinstance(location, dict) else ""
@@ -148,10 +154,11 @@ def classify_work_mode(raw: dict[str, Any]) -> tuple[str, str]:
         if work_mode in {"remote", "hybrid"}
         else "unknown"
     )
-    return work_mode, scope
+    full_remote = work_mode == "remote" and any(FULL_REMOTE.search(text) for text in evidence)
+    return work_mode, scope, full_remote
 
 
-def classify_lever_work_mode(raw: dict[str, Any]) -> tuple[str, str]:
+def classify_lever_work_mode(raw: dict[str, Any]) -> tuple[str, str, bool]:
     """Classify Lever evidence, preferring its explicit workplace type."""
     categories = raw.get("categories")
     categories = categories if isinstance(categories, dict) else {}
@@ -180,7 +187,7 @@ def classify_lever_work_mode(raw: dict[str, Any]) -> tuple[str, str]:
     structured_modes = {"remote": "remote", "hybrid": "hybrid", "on-site": "onsite"}
     work_mode = structured_modes.get(structured) if isinstance(structured, str) else None
     if work_mode is None:
-        work_mode, _ = classify_work_mode(
+        work_mode, _, _ = classify_work_mode(
             {
                 "title": raw.get("text"),
                 "location": {"name": location_text},
@@ -202,10 +209,11 @@ def classify_lever_work_mode(raw: dict[str, Any]) -> tuple[str, str]:
     country = raw.get("country")
     if work_mode == "remote" and scope == "unknown" and isinstance(country, str) and country:
         scope = "restricted"
-    return work_mode, scope
+    full_remote = work_mode == "remote" and bool(FULL_REMOTE.search(evidence))
+    return work_mode, scope, full_remote
 
 
-def classify_france_travail_work_mode(raw: dict[str, Any]) -> tuple[str, str]:
+def classify_france_travail_work_mode(raw: dict[str, Any]) -> tuple[str, str, bool]:
     """Classify France Travail evidence, preferring structured telework data."""
     structured = raw.get("teletravail")
     if isinstance(structured, dict):
@@ -229,7 +237,7 @@ def classify_france_travail_work_mode(raw: dict[str, Any]) -> tuple[str, str]:
     if not isinstance(location_name, str):
         location_name = ""
     if work_mode == "unknown" and (not structured_text or structured_unspecified):
-        work_mode, _ = classify_work_mode(
+        work_mode, _, _ = classify_work_mode(
             {
                 "title": raw.get("intitule"),
                 "location": {"name": location_name},
@@ -259,4 +267,10 @@ def classify_france_travail_work_mode(raw: dict[str, Any]) -> tuple[str, str]:
     ) or bool(re.search(r"\bfrance\b", _plain(location_name)))
     if work_mode in {"remote", "hybrid"} and french_location:
         scope = "france"
-    return work_mode, scope
+    structured_full_remote = bool(
+        re.search(r"\b(?:total|integral|100 ?%)\b", structured_text)
+    )
+    full_remote = work_mode == "remote" and (
+        structured_full_remote or bool(FULL_REMOTE.search(evidence))
+    )
+    return work_mode, scope, full_remote

@@ -19,6 +19,7 @@ class Job:
     published_at: datetime | None = None
     collected_at: datetime | None = None
     source_key: str | None = None
+    full_remote: bool = False
 
     def discovered_at(self) -> datetime:
         return self.collected_at or utc_now()

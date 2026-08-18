@@ -4,8 +4,8 @@ Job Harvester will be a small, local-first CLI that collects public job offers,
 normalizes them, stores them in SQLite, and reports newly discovered listings.
 It will not require Career-Ops or any hosted service.
 
-> Status: V6 implemented with persistent, lazily revalidated review batches on
-> top of the three-source collection pipeline and ATS board registry.
+> Status: V6.1 implemented with persistent, lazily revalidated review batches
+> and deterministic full-remote/geographic candidate priority.
 
 ## Collection workflow
 
@@ -28,7 +28,8 @@ The collection states describe the latest successful collection:
 
 - `new`: the identity was first discovered in that collection;
 - `updated`: a previously stored job changed title, company, location, remote
-  status, publication time, or URL in that collection;
+  classification (including explicit full remote), publication time, or URL in
+  that collection;
 - `seen`: the job existed before and its stored source fields did not change in
   that collection.
 
@@ -73,10 +74,13 @@ batch, expiry, or review-state changes are committed. Greenhouse and Lever jobs
 collected before V6 lack their persisted board slug and must be collected once
 with V6 before they can be revalidated.
 
-Candidate ordering is deterministic: remote, hybrid, unknown, then onsite;
-within each group, reliable publication timestamps sort newest first, followed
+Candidate ordering is deterministic. Explicit full-remote jobs rank first by
+France, Europe, worldwide, then unknown scope. Other remote jobs follow in the
+same geographic order, then restricted remote, hybrid, unknown, and onsite.
+Within each group, reliable publication timestamps sort newest first, followed
 by discovery time and stable source/company/title/ID tie-breakers. Existing
-filter eligibility still applies, and no numeric scoring is involved.
+filter eligibility still applies, and this is a fixed category ordering—not a
+numeric scoring system.
 
 ## Filtering
 
@@ -154,6 +158,7 @@ then by external ID. Each object has this stable, intentionally flat shape:
   "location": "Paris, France",
   "work_mode": "remote",
   "remote_scope": "france",
+  "full_remote": true,
   "published_at": null,
   "url": "https://boards.greenhouse.io/example/jobs/123",
   "collected_at": "2026-08-18T08:00:00+00:00",

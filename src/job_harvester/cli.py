@@ -236,7 +236,8 @@ def _print_batch_entries(batch_id: int, entries: list | tuple) -> None:
             f"{entry.position}. [{entry.review_state}{decision}] "
             f"{job.company} — {job.title} | {job.source}/{job.external_id}"
         )
-        print(f"   {job.work_mode} ({job.remote_scope}) | {job.url}")
+        mode = "full_remote" if job.full_remote else job.work_mode
+        print(f"   {mode} ({job.remote_scope}) | {job.url}")
 
 
 def run_batch(args: argparse.Namespace) -> int:
@@ -309,14 +310,15 @@ def run_list(config_path: Path, database_path: Path, *, new_only: bool) -> int:
         print(f"[{record.state}] {job.company} — {job.title}")
         print(
             f"{location} | {job.source} | "
-            f"{job.work_mode} ({job.remote_scope})"
+            f"{'full_remote' if job.full_remote else job.work_mode} "
+            f"({job.remote_scope})"
         )
         print(job.url)
     print(f"\n{len(records)} relevant job(s)." if records else "0 relevant jobs.")
     return 0
 
 
-def _export_record(record: StoredJob) -> dict[str, str | None]:
+def _export_record(record: StoredJob) -> dict[str, str | bool | None]:
     job = record.job
     return {
         "source": job.source,
@@ -326,6 +328,7 @@ def _export_record(record: StoredJob) -> dict[str, str | None]:
         "location": job.location,
         "work_mode": job.work_mode,
         "remote_scope": job.remote_scope,
+        "full_remote": job.full_remote,
         "published_at": job.published_at.isoformat() if job.published_at else None,
         "url": job.url,
         "collected_at": job.collected_at.isoformat() if job.collected_at else None,

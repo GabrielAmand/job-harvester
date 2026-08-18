@@ -74,7 +74,7 @@ class LeverCollector:
             location = " / ".join(
                 value for value in all_locations if isinstance(value, str)
             ) if isinstance(all_locations, list) else ""
-        work_mode, remote_scope = classify_lever_work_mode(raw)
+        work_mode, remote_scope, full_remote = classify_lever_work_mode(raw)
         return Job(
             source="lever",
             external_id=job_id.strip(),
@@ -84,5 +84,6 @@ class LeverCollector:
             url=hosted_url.strip(),
             work_mode=work_mode,
             remote_scope=remote_scope,
+            full_remote=full_remote,
             source_key=self.company_slug,
         )

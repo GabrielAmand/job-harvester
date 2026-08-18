@@ -11,13 +11,14 @@ def classify(
     *, title: str = "Engineer", location: str = "", content: str = "",
     metadata: object = None, offices: object = None,
 ) -> tuple[str, str]:
-    return classify_work_mode({
+    result = classify_work_mode({
         "title": title,
         "location": {"name": location},
         "content": content,
         "metadata": metadata,
         "offices": offices,
     })
+    return result[0], result[1]
 
 
 class WorkModeTests(unittest.TestCase):
@@ -97,7 +98,7 @@ class WorkModeTests(unittest.TestCase):
                 "workplaceType": "remote",
                 "descriptionPlain": "Work in the office.",
             }),
-            ("remote", "restricted"),
+            ("remote", "restricted", False),
         )
         self.assertEqual(
             classify_lever_work_mode({
@@ -105,7 +106,7 @@ class WorkModeTests(unittest.TestCase):
                 "categories": {"location": "Remote"},
                 "workplaceType": "remote",
             }),
-            ("remote", "unknown"),
+            ("remote", "unknown", False),
         )
         self.assertEqual(
             classify_lever_work_mode({
@@ -114,7 +115,7 @@ class WorkModeTests(unittest.TestCase):
                 "country": "US",
                 "workplaceType": "remote",
             }),
-            ("remote", "restricted"),
+            ("remote", "restricted", False),
         )
 
     def test_lever_unspecified_falls_back_conservatively(self) -> None:
@@ -125,7 +126,7 @@ class WorkModeTests(unittest.TestCase):
                 "workplaceType": "unspecified",
                 "descriptionPlain": "This is a hybrid role.",
             }),
-            ("hybrid", "unknown"),
+            ("hybrid", "unknown", False),
         )
 
     def test_france_travail_structured_telework_has_priority(self) -> None:
@@ -136,7 +137,7 @@ class WorkModeTests(unittest.TestCase):
                 "teletravail": {"libelle": "Télétravail total"},
                 "lieuTravail": {"libelle": "75 - Paris", "codePostal": "75001"},
             }),
-            ("remote", "france"),
+            ("remote", "france", True),
         )
         self.assertEqual(
             classify_france_travail_work_mode({
@@ -145,7 +146,7 @@ class WorkModeTests(unittest.TestCase):
                 "teletravail": "Télétravail possible selon accord",
                 "lieuTravail": {"libelle": "75 - Paris", "codePostal": "75001"},
             }),
-            ("unknown", "unknown"),
+            ("unknown", "unknown", False),
         )
         self.assertEqual(
             classify_france_travail_work_mode({
@@ -154,5 +155,39 @@ class WorkModeTests(unittest.TestCase):
                 "teletravail": "Non précisé",
                 "lieuTravail": {"libelle": "France"},
             }),
-            ("remote", "france"),
+            ("remote", "france", False),
+        )
+
+    def test_explicit_full_remote_detection_is_conservative(self) -> None:
+        strong = [
+            "Fully remote — France",
+            "Full remote — Europe",
+            "100% remote worldwide",
+            "Work from anywhere",
+            "Fully distributed team",
+        ]
+        for location in strong:
+            with self.subTest(location=location):
+                self.assertTrue(classify_work_mode({
+                    "title": "Engineer", "location": {"name": location}
+                })[2])
+        weak = [
+            "Remote", "Remote-friendly", "Work with remote colleagues",
+            "Distributed systems", "WFH allowance", "Occasional telework",
+            "Hybrid arrangement",
+        ]
+        for content in weak:
+            with self.subTest(content=content):
+                self.assertFalse(classify_work_mode({
+                    "title": "Engineer", "location": {"name": ""},
+                    "content": content,
+                })[2])
+
+    def test_french_full_remote_wording(self) -> None:
+        self.assertEqual(
+            classify_work_mode({
+                "title": "Ingénieur", "location": {"name": "France"},
+                "content": "Poste en 100% télétravail, basé en France.",
+            }),
+            ("remote", "france", True),
         )

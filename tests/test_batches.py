@@ -12,10 +12,12 @@ from job_harvester.storage import JobStore
 
 
 def make_job(identity: str, mode: str = "unknown", *, source: str = "greenhouse",
-             published: datetime | None = None) -> Job:
+             published: datetime | None = None, scope: str = "unknown",
+             full_remote: bool = False) -> Job:
     return Job(
         source, identity, "Acme", f"Platform Engineer {identity}", "Paris",
-        f"https://jobs/{identity}", work_mode=mode, published_at=published,
+        f"https://jobs/{identity}", work_mode=mode, remote_scope=scope,
+        full_remote=full_remote, published_at=published,
         collected_at=datetime(2026, 1, 1, tzinfo=timezone.utc),
         source_key="acme" if source != "france_travail" else None,
     )
@@ -60,6 +62,41 @@ class BatchTests(unittest.TestCase):
         result = start_batch(self.database, self.filters, limit=3, revalidator=checker)
         self.assertEqual(checker.seen, ["remote-new", "remote-old", "hybrid"])
         self.assertEqual([e.job.external_id for e in result.entries], checker.seen)
+
+    def test_full_remote_and_scope_priority_categories(self) -> None:
+        jobs = [
+            make_job("onsite", "onsite"), make_job("unknown"),
+            make_job("hybrid", "hybrid"),
+            make_job("remote-restricted", "remote", scope="restricted"),
+            make_job("remote-unknown", "remote"),
+            make_job("remote-worldwide", "remote", scope="worldwide"),
+            make_job("remote-europe", "remote", scope="europe"),
+            make_job("remote-france", "remote", scope="france"),
+            make_job("full-unknown", "remote", full_remote=True),
+            make_job("full-worldwide", "remote", scope="worldwide", full_remote=True),
+            make_job("full-europe", "remote", scope="europe", full_remote=True),
+            make_job("full-france", "remote", scope="france", full_remote=True),
+        ]
+        self.seed(reversed(jobs))
+        checker = FakeRevalidator()
+        start_batch(self.database, self.filters, limit=12, revalidator=checker)
+        self.assertEqual(checker.seen, [
+            "full-france", "full-europe", "full-worldwide", "full-unknown",
+            "remote-france", "remote-europe", "remote-worldwide",
+            "remote-unknown", "remote-restricted", "hybrid", "unknown", "onsite",
+        ])
+
+    def test_same_category_keeps_recency_and_stable_tie_breakers(self) -> None:
+        old = datetime(2026, 1, 1, tzinfo=timezone.utc)
+        new = datetime(2026, 2, 1, tzinfo=timezone.utc)
+        self.seed([
+            make_job("b", "remote", scope="france", published=old),
+            make_job("c", "remote", scope="france", published=new),
+            make_job("a", "remote", scope="france", published=old),
+        ])
+        checker = FakeRevalidator()
+        start_batch(self.database, self.filters, limit=3, revalidator=checker)
+        self.assertEqual(checker.seen, ["c", "a", "b"])
 
     def test_expired_jobs_are_replaced_and_reviewed_jobs_do_not_return(self) -> None:
         self.seed([make_job(str(i), "remote") for i in range(4)])
@@ -122,3 +159,4 @@ class BatchTests(unittest.TestCase):
         with JobStore(self.database) as store:
             columns = {r[1] for r in store.connection.execute("PRAGMA table_info(jobs)")}
         self.assertIn("source_key", columns)
+        self.assertIn("full_remote", columns)
