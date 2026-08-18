@@ -51,9 +51,18 @@ class Filters:
 
 
 @dataclass(frozen=True, slots=True)
+class CareerOpsConfig:
+    enabled: bool = False
+    repository_path: Path | None = None
+    node_command: str = "node"
+    batch_size: int = 20
+
+
+@dataclass(frozen=True, slots=True)
 class Config:
     sources: tuple[GreenhouseSource | LeverSource | FranceTravailSource, ...]
     filters: Filters
+    career_ops: CareerOpsConfig = CareerOpsConfig()
 
 
 def _nonempty_string(value: object, field: str, index: int) -> str:
@@ -96,6 +105,35 @@ def _boolean(raw: object, field: str, default: bool) -> bool:
     if not isinstance(raw, bool):
         raise ConfigError(f"filters.{field} must be a boolean")
     return raw
+
+
+def _career_ops_config(raw: object) -> CareerOpsConfig:
+    if raw is None:
+        return CareerOpsConfig()
+    if not isinstance(raw, dict):
+        raise ConfigError("career_ops must be a table")
+    enabled = raw.get("enabled", False)
+    if not isinstance(enabled, bool):
+        raise ConfigError("career_ops.enabled must be a boolean")
+    repository = raw.get("repository_path")
+    if repository is not None and (
+        not isinstance(repository, str) or not repository.strip()
+    ):
+        raise ConfigError("career_ops.repository_path must be a non-empty string")
+    if enabled and repository is None:
+        raise ConfigError("career_ops.repository_path is required when enabled")
+    node_command = raw.get("node_command", "node")
+    if not isinstance(node_command, str) or not node_command.strip():
+        raise ConfigError("career_ops.node_command must be a non-empty string")
+    batch_size = raw.get("batch_size", 20)
+    if not isinstance(batch_size, int) or isinstance(batch_size, bool) or batch_size <= 0:
+        raise ConfigError("career_ops.batch_size must be a positive integer")
+    return CareerOpsConfig(
+        enabled=enabled,
+        repository_path=Path(repository).expanduser() if repository is not None else None,
+        node_command=node_command.strip(),
+        batch_size=batch_size,
+    )
 
 
 def load_config(path: str | Path) -> Config:
@@ -180,4 +218,4 @@ def load_config(path: str | Path) -> Config:
             else Filters().excluded_title_phrases
         ),
     )
-    return Config(tuple(sources), filters)
+    return Config(tuple(sources), filters, _career_ops_config(document.get("career_ops")))

@@ -6,7 +6,12 @@ import sys
 from collections.abc import Sequence
 
 from job_harvester.board_validation import BoardValidator
-from job_harvester.batches import BatchError, BatchStore, start_batch
+from job_harvester.batches import DECISIONS, BatchError, BatchStore, start_batch
+from job_harvester.career_ops import (
+    CareerOpsError,
+    CareerOpsEvaluation,
+    evaluate_open_batch,
+)
 from job_harvester.collectors.base import CollectionError
 from job_harvester.collectors.france_travail import FranceTravailCollector
 from job_harvester.collectors.greenhouse import GreenhouseCollector
@@ -68,12 +73,20 @@ def build_parser() -> argparse.ArgumentParser:
     start = batch_commands.add_parser("start", help="create a review batch")
     start.add_argument("--config", type=Path, default=Path("config.toml"))
     start.add_argument("--limit", type=int, default=20)
+    evaluate = batch_commands.add_parser(
+        "evaluate", help="evaluate the open batch with Career-Ops"
+    )
+    evaluate.add_argument("--config", type=Path, default=Path("config.toml"))
+    evaluate.add_argument("--limit", type=int)
+    evaluate.add_argument(
+        "--force", action="store_true", help="reevaluate completed jobs"
+    )
     batch_commands.add_parser("current", help="show the open batch")
     review = batch_commands.add_parser("review", help="mark a batch job reviewed")
     review.add_argument("source", choices=("greenhouse", "lever", "france_travail"))
     review.add_argument("external_id")
     review.add_argument(
-        "--decision", choices=("interesting", "skip", "undecided"),
+        "--decision", choices=DECISIONS,
         default="undecided",
     )
     batch_commands.add_parser("complete", help="complete the open batch")
@@ -251,6 +264,44 @@ def run_batch(args: argparse.Namespace) -> int:
         )
         _print_batch_entries(result.batch.id, result.entries)
         return 0
+    if args.batch_command == "evaluate":
+        config = load_config(args.config)
+
+        def progress(index: int, total: int, evaluation: CareerOpsEvaluation) -> None:
+            print(
+                f"[{index}/{total}] {evaluation.company} — {evaluation.title}"
+            )
+            if evaluation.status == "completed":
+                print(
+                    f"      score {evaluation.score:g} — {evaluation.category}"
+                )
+            else:
+                print(f"      failed — {evaluation.error}")
+
+        result = evaluate_open_batch(
+            args.database,
+            config.career_ops,
+            limit=args.limit,
+            force=args.force,
+            progress=progress,
+        )
+        categories = {
+            name: sum(item.category == name for item in result.evaluations)
+            for name in (
+                "automatic_skip", "review", "good_candidate", "priority_candidate"
+            )
+        }
+        print(
+            f"Evaluated: {len(result.evaluations)}\n"
+            f"Skipped: {categories['automatic_skip']}\n"
+            f"Review: {categories['review']}\n"
+            f"Good: {categories['good_candidate']}\n"
+            f"Priority: {categories['priority_candidate']}\n"
+            f"Failed: {result.failed}"
+        )
+        if result.already_completed:
+            print(f"Already completed: {result.already_completed}")
+        return 1 if result.failed else 0
     with BatchStore(args.database) as store:
         if args.batch_command == "list":
             batches = store.list()
@@ -380,6 +431,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         RegistryError,
         BatchError,
         RevalidationError,
+        CareerOpsError,
         sqlite3.Error,
         OSError,
     ) as error:

@@ -57,6 +57,18 @@ class ConfigTests(unittest.TestCase):
         self.assertIsInstance(config.sources[1], LeverSource)
         self.assertEqual(config.sources[1].company_slug, "other")  # type: ignore[union-attr]
 
+    def test_loads_career_ops_configuration(self) -> None:
+        path = self.directory / "config.toml"
+        path.write_text(
+            '[career_ops]\nenabled = true\nrepository_path = "/tmp/career-ops"\n'
+            'node_command = "node22"\nbatch_size = 5\n'
+        )
+        career_ops = load_config(path).career_ops
+        self.assertTrue(career_ops.enabled)
+        self.assertEqual(career_ops.repository_path, Path("/tmp/career-ops"))
+        self.assertEqual(career_ops.node_command, "node22")
+        self.assertEqual(career_ops.batch_size, 5)
+
     def test_loads_france_travail_search_terms(self) -> None:
         path = self.directory / "config.toml"
         path.write_text(
@@ -87,6 +99,14 @@ class ConfigTests(unittest.TestCase):
                 '[[sources]]\ntype = "greenhouse"\ncompany = "Acme"\nboard_token = "a"\n'
                 '[filters]\nallow_hybrid = "yes"\n',
                 "boolean",
+            ),
+            (
+                '[career_ops]\nenabled = true\n',
+                "repository_path",
+            ),
+            (
+                '[career_ops]\nbatch_size = 0\n',
+                "positive integer",
             ),
         ]
         for content, message in cases:

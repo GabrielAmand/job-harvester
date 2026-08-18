@@ -4,8 +4,8 @@ Job Harvester will be a small, local-first CLI that collects public job offers,
 normalizes them, stores them in SQLite, and reports newly discovered listings.
 It will not require Career-Ops or any hosted service.
 
-> Status: V6.2 implemented with deterministic geographic eligibility, obvious
-> role exclusions, and title-based seniority priority before Career-Ops handoff.
+> Status: V7 implemented with persistent, retryable Career-Ops evaluation of
+> open review batches and normalized result import.
 
 ## Collection workflow
 
@@ -88,6 +88,36 @@ numeric scoring system.
 Strong-seniority titles are excluded from normal batches by default. Set
 `allow_strong_seniority = true` to retain them at the bottom of their remote
 category. `senior` remains eligible and deprioritized within its category.
+
+## Career-Ops evaluation
+
+V7 can hand the current open batch to a local Career-Ops checkout sequentially:
+
+```toml
+[career_ops]
+enabled = true
+repository_path = "/absolute/path/to/career-ops"
+node_command = "node"
+batch_size = 20
+```
+
+```console
+job-harvester batch --database jobs.sqlite3 evaluate --config config.toml --limit 5
+```
+
+Each invocation receives only the live job URL, an opaque
+`job-harvester:<job_id>` external ID, and a deterministic result path inside
+Career-Ops. Job Harvester never passes its SQLite database. Completed schema-1.0
+results are imported into a separate `career_ops_evaluations` table and mapped
+to review decisions: automatic skip, needs review, good candidate, or priority
+candidate. Report and CV paths remain Career-Ops-owned references; explicit
+null paths remain null.
+
+Completed evaluations are skipped on repeated runs. `--force` explicitly
+reevaluates them. Failed processes or invalid results persist an integration
+error and leave the job `in_review`, so an ordinary later evaluation retries it.
+Evaluation never completes a batch automatically; run `batch complete` only
+after every entry has a completed evaluation or an explicit manual review.
 
 ## Filtering
 

@@ -234,3 +234,32 @@ class BatchTests(unittest.TestCase):
             columns = {r[1] for r in store.connection.execute("PRAGMA table_info(jobs)")}
         self.assertIn("source_key", columns)
         self.assertIn("full_remote", columns)
+
+    def test_migrates_v6_review_decisions_additively(self) -> None:
+        self.seed([make_job("legacy")])
+        connection = sqlite3.connect(self.database)
+        job_id = connection.execute("SELECT id FROM jobs").fetchone()[0]
+        connection.execute(
+            """
+            CREATE TABLE job_reviews (
+                job_id INTEGER PRIMARY KEY,
+                review_state TEXT NOT NULL DEFAULT 'pending'
+                    CHECK (review_state IN ('pending', 'in_review', 'reviewed', 'expired')),
+                decision TEXT CHECK (decision IN ('interesting', 'skip', 'undecided')),
+                reviewed_at TEXT
+            )
+            """
+        )
+        connection.execute(
+            "INSERT INTO job_reviews VALUES (?, 'reviewed', 'interesting', NULL)",
+            (job_id,),
+        )
+        connection.commit()
+        connection.close()
+        with BatchStore(self.database) as store:
+            schema = store.connection.execute(
+                "SELECT sql FROM sqlite_master WHERE name='job_reviews'"
+            ).fetchone()[0]
+            row = store.connection.execute("SELECT * FROM job_reviews").fetchone()
+        self.assertIn("priority_candidate", schema)
+        self.assertEqual(row[:3], (job_id, "reviewed", "interesting"))

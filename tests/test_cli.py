@@ -68,6 +68,15 @@ class CliTests(unittest.TestCase):
         self.assertIn("batch size: 1", output.getvalue())
         self.assertIn("Completed batch 1", output.getvalue())
 
+    def test_batch_evaluate_cli_arguments(self) -> None:
+        args = cli.build_parser().parse_args([
+            "batch", "--database", str(self.database), "evaluate",
+            "--config", str(self.config), "--limit", "5", "--force",
+        ])
+        self.assertEqual(args.batch_command, "evaluate")
+        self.assertEqual(args.limit, 5)
+        self.assertTrue(args.force)
+
     def test_collects_greenhouse_and_lever_in_one_atomic_run(self) -> None:
         self.config.write_text(
             self.config.read_text()

@@ -61,3 +61,10 @@ allow_hybrid = true
 allow_onsite = true
 exclude_incompatible_remote = true
 allow_strong_seniority = false
+
+[career_ops]
+enabled = false
+# Absolute path to your local Career-Ops checkout.
+repository_path = "/path/to/career-ops"
+node_command = "node"
+batch_size = 20

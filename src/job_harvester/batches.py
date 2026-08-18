@@ -14,7 +14,10 @@ from job_harvester.storage import JobStore, _datetime, _timestamp
 
 
 REVIEW_STATES = ("pending", "in_review", "reviewed", "expired")
-DECISIONS = ("interesting", "skip", "undecided")
+DECISIONS = (
+    "interesting", "skip", "undecided", "needs_review",
+    "good_candidate", "priority_candidate",
+)
 
 
 class BatchError(ValueError):
@@ -52,7 +55,10 @@ CREATE TABLE IF NOT EXISTS job_reviews (
     job_id INTEGER PRIMARY KEY,
     review_state TEXT NOT NULL DEFAULT 'pending'
         CHECK (review_state IN ('pending', 'in_review', 'reviewed', 'expired')),
-    decision TEXT CHECK (decision IN ('interesting', 'skip', 'undecided')),
+    decision TEXT CHECK (decision IN (
+        'interesting', 'skip', 'undecided', 'needs_review',
+        'good_candidate', 'priority_candidate'
+    )),
     reviewed_at TEXT,
     FOREIGN KEY (job_id) REFERENCES jobs(id)
 );
@@ -75,6 +81,24 @@ CREATE TABLE IF NOT EXISTS batch_jobs (
     FOREIGN KEY (batch_id) REFERENCES batches(id),
     FOREIGN KEY (job_id) REFERENCES jobs(id)
 );
+CREATE TABLE IF NOT EXISTS career_ops_evaluations (
+    job_id INTEGER PRIMARY KEY,
+    career_ops_status TEXT NOT NULL CHECK (
+        career_ops_status IN ('completed', 'failed')
+    ),
+    career_ops_score REAL,
+    career_ops_category TEXT,
+    career_ops_recommendation TEXT,
+    career_ops_tracker_id INTEGER,
+    career_ops_result_path TEXT NOT NULL,
+    career_ops_report_path TEXT,
+    career_ops_cv_payload_path TEXT,
+    career_ops_cv_html_path TEXT,
+    career_ops_cv_pdf_path TEXT,
+    career_ops_evaluated_at TEXT,
+    career_ops_error TEXT,
+    FOREIGN KEY (job_id) REFERENCES jobs(id)
+);
 """
 
 
@@ -84,8 +108,37 @@ class BatchStore(AbstractContextManager["BatchStore"]):
         with JobStore(path):
             pass
         self.connection = sqlite3.connect(path)
+        self._migrate_review_decisions()
         self.connection.executescript(SCHEMA)
         self.connection.commit()
+
+    def _migrate_review_decisions(self) -> None:
+        row = self.connection.execute(
+            "SELECT sql FROM sqlite_master WHERE type='table' AND name='job_reviews'"
+        ).fetchone()
+        if row is None or "needs_review" in str(row[0]):
+            return
+        with self.connection:
+            self.connection.execute("ALTER TABLE job_reviews RENAME TO job_reviews_v6")
+            self.connection.execute(
+                """
+                CREATE TABLE job_reviews (
+                    job_id INTEGER PRIMARY KEY,
+                    review_state TEXT NOT NULL DEFAULT 'pending'
+                        CHECK (review_state IN ('pending', 'in_review', 'reviewed', 'expired')),
+                    decision TEXT CHECK (decision IN (
+                        'interesting', 'skip', 'undecided', 'needs_review',
+                        'good_candidate', 'priority_candidate'
+                    )),
+                    reviewed_at TEXT,
+                    FOREIGN KEY (job_id) REFERENCES jobs(id)
+                )
+                """
+            )
+            self.connection.execute(
+                "INSERT INTO job_reviews SELECT * FROM job_reviews_v6"
+            )
+            self.connection.execute("DROP TABLE job_reviews_v6")
 
     def close(self) -> None:
         self.connection.close()
