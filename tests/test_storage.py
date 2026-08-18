@@ -159,6 +159,7 @@ class StorageTests(unittest.TestCase):
         )
         self.assertEqual(record.job.work_mode, "unknown")
         self.assertEqual(record.job.remote_scope, "unknown")
+        self.assertEqual(record.job.remote_eligibility, "unknown")
 
     def test_work_mode_and_scope_changes_are_updates(self) -> None:
         with JobStore(self.database) as store:
@@ -179,3 +180,14 @@ class StorageTests(unittest.TestCase):
             record = store.list_jobs()[0]
         self.assertEqual(result.updated, 1)
         self.assertTrue(record.job.full_remote)
+
+    def test_remote_eligibility_is_persisted_as_a_meaningful_update(self) -> None:
+        with JobStore(self.database) as store:
+            store.upsert([make_job(work_mode="remote", remote_scope="restricted")])
+            result = store.upsert([make_job(
+                work_mode="remote", remote_scope="restricted",
+                remote_eligibility="incompatible",
+            )])
+            record = store.list_jobs()[0]
+        self.assertEqual(result.updated, 1)
+        self.assertEqual(record.job.remote_eligibility, "incompatible")

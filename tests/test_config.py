@@ -31,6 +31,9 @@ class ConfigTests(unittest.TestCase):
             '[filters]\npositive_title_keywords = ["cloud", "SRE"]\n'
             'negative_title_keywords = ["director"]\nlocation_keywords = ["Paris"]\n'
             'remote_policy = "prefer"\nallow_hybrid = true\nallow_onsite = false\n'
+            'exclude_incompatible_remote = false\n'
+            'allow_strong_seniority = true\n'
+            'excluded_title_phrases = ["custom manager"]\n'
         )
         filters = load_config(path).filters
         self.assertEqual(filters.positive_title_keywords, ("cloud", "SRE"))
@@ -39,6 +42,9 @@ class ConfigTests(unittest.TestCase):
         self.assertEqual(filters.remote_policy, "prefer")
         self.assertTrue(filters.allow_hybrid)
         self.assertFalse(filters.allow_onsite)
+        self.assertFalse(filters.exclude_incompatible_remote)
+        self.assertTrue(filters.allow_strong_seniority)
+        self.assertEqual(filters.excluded_title_phrases, ("custom manager",))
 
     def test_loads_mixed_greenhouse_and_lever_sources(self) -> None:
         path = self.directory / "config.toml"

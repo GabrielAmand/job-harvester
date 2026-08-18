@@ -329,6 +329,7 @@ def _export_record(record: StoredJob) -> dict[str, str | bool | None]:
         "work_mode": job.work_mode,
         "remote_scope": job.remote_scope,
         "full_remote": job.full_remote,
+        "remote_eligibility": job.remote_eligibility,
         "published_at": job.published_at.isoformat() if job.published_at else None,
         "url": job.url,
         "collected_at": job.collected_at.isoformat() if job.collected_at else None,

@@ -4,8 +4,8 @@ Job Harvester will be a small, local-first CLI that collects public job offers,
 normalizes them, stores them in SQLite, and reports newly discovered listings.
 It will not require Career-Ops or any hosted service.
 
-> Status: V6.1 implemented with persistent, lazily revalidated review batches
-> and deterministic full-remote/geographic candidate priority.
+> Status: V6.2 implemented with deterministic geographic eligibility, obvious
+> role exclusions, and title-based seniority priority before Career-Ops handoff.
 
 ## Collection workflow
 
@@ -77,17 +77,26 @@ with V6 before they can be revalidated.
 Candidate ordering is deterministic. Explicit full-remote jobs rank first by
 France, Europe, worldwide, then unknown scope. Other remote jobs follow in the
 same geographic order, then restricted remote, hybrid, unknown, and onsite.
-Within each group, reliable publication timestamps sort newest first, followed
+Within each remote category, normal/junior-unspecified titles precede titles
+containing `senior`, which precede explicit `principal`, `staff`, `distinguished`,
+and title-token `lead` roles. Within each category and seniority tier, reliable
+publication timestamps sort newest first, followed
 by discovery time and stable source/company/title/ID tie-breakers. Existing
 filter eligibility still applies, and this is a fixed category ordering—not a
 numeric scoring system.
+
+Strong-seniority titles are excluded from normal batches by default. Set
+`allow_strong_seniority = true` to retain them at the bottom of their remote
+category. `senior` remains eligible and deprioritized within its category.
 
 ## Filtering
 
 Matching is deterministic, case-insensitive literal substring matching. A job
 must match at least one positive title keyword, must not match any negative
 title keyword, and must match a location keyword when that optional list is not
-empty. Negative matches take precedence. `senior` is not rejected by default.
+empty. Negative matches take precedence. Explicit management/executive title
+phrases are excluded by default through `excluded_title_phrases`; descriptions
+do not participate. `senior` is not rejected by default.
 
 ```toml
 [filters]
@@ -105,11 +114,18 @@ positive_title_keywords = [
   "ci/cd",
 ]
 negative_title_keywords = [
+  # Additional profile-specific exclusions.
+]
+excluded_title_phrases = [
+  "program manager",
+  "product manager",
+  "product management",
+  "project manager",
+  "engineering manager",
   "director",
   "head of",
   "vice president",
-  "principal",
-  "staff engineer",
+  "vp",
 ]
 location_keywords = ["france", "remote"] # optional; [] accepts all locations
 ```
@@ -130,11 +146,21 @@ checks exposed work-mode metadata, title/location, offices, and finally explicit
 phrases in the job description. Matching is boundary-aware and accent-insensitive;
 vague technical text such as “hybrid cloud” or “distributed systems” is ignored.
 
+Remote eligibility is separately normalized as `compatible`, `incompatible`,
+or `unknown` for the current France/EU profile. France, Europe, and worldwide
+are compatible. Explicit US/United States/Canada-only, residency, candidate, or
+US-state restrictions are incompatible. Generic restricted scope, timezone
+restrictions, and unknown restrictions remain unknown and eligible. Set
+`exclude_incompatible_remote = false` to retain even explicitly incompatible
+jobs; this is a small profile override, not a work-authorization engine.
+
 ```toml
 [filters]
 remote_policy = "any" # any, prefer, or require
 allow_hybrid = true
 allow_onsite = true
+exclude_incompatible_remote = true
+allow_strong_seniority = false
 ```
 
 `any` retains remote and unknown jobs and applies the two explicit allow gates.
@@ -159,6 +185,7 @@ then by external ID. Each object has this stable, intentionally flat shape:
   "work_mode": "remote",
   "remote_scope": "france",
   "full_remote": true,
+  "remote_eligibility": "compatible",
   "published_at": null,
   "url": "https://boards.greenhouse.io/example/jobs/123",
   "collected_at": "2026-08-18T08:00:00+00:00",

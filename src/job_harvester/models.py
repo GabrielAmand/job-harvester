@@ -20,6 +20,7 @@ class Job:
     collected_at: datetime | None = None
     source_key: str | None = None
     full_remote: bool = False
+    remote_eligibility: str = "unknown"
 
     def discovered_at(self) -> datetime:
         return self.collected_at or utc_now()

@@ -25,6 +25,7 @@ CREATE TABLE IF NOT EXISTS jobs (
     state TEXT NOT NULL DEFAULT 'seen',
     source_key TEXT,
     full_remote INTEGER NOT NULL DEFAULT 0,
+    remote_eligibility TEXT NOT NULL DEFAULT 'unknown',
     UNIQUE (source, external_id)
 )
 """
@@ -73,6 +74,10 @@ class JobStore(AbstractContextManager["JobStore"]):
             self.connection.execute(
                 "ALTER TABLE jobs ADD COLUMN full_remote INTEGER NOT NULL DEFAULT 0"
             )
+        if "remote_eligibility" not in columns:
+            self.connection.execute(
+                "ALTER TABLE jobs ADD COLUMN remote_eligibility TEXT NOT NULL DEFAULT 'unknown'"
+            )
         self.connection.commit()
 
     def close(self) -> None:
@@ -90,7 +95,7 @@ class JobStore(AbstractContextManager["JobStore"]):
                 existing = self.connection.execute(
                     """
                     SELECT company, title, location, work_mode, remote_scope,
-                           published_at, url, full_remote
+                           published_at, url, full_remote, remote_eligibility
                     FROM jobs WHERE source = ? AND external_id = ?
                     """,
                     (job.source, job.external_id),
@@ -105,6 +110,7 @@ class JobStore(AbstractContextManager["JobStore"]):
                     _timestamp(job.published_at),
                     job.url,
                     int(job.full_remote),
+                    job.remote_eligibility,
                 )
                 if existing is None:
                     state = "new"
@@ -119,8 +125,8 @@ class JobStore(AbstractContextManager["JobStore"]):
                     INSERT INTO jobs (
                         source, external_id, company, title, location,
                         work_mode, remote_scope, published_at, url, collected_at, state,
-                        source_key, full_remote
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        source_key, full_remote, remote_eligibility
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     ON CONFLICT(source, external_id) DO UPDATE SET
                         company = excluded.company,
                         title = excluded.title,
@@ -131,7 +137,8 @@ class JobStore(AbstractContextManager["JobStore"]):
                         url = excluded.url,
                         state = excluded.state,
                         source_key = COALESCE(excluded.source_key, jobs.source_key),
-                        full_remote = excluded.full_remote
+                        full_remote = excluded.full_remote,
+                        remote_eligibility = excluded.remote_eligibility
                     """,
                     (
                         job.source,
@@ -147,6 +154,7 @@ class JobStore(AbstractContextManager["JobStore"]):
                         state,
                         job.source_key,
                         int(job.full_remote),
+                        job.remote_eligibility,
                     ),
                 )
         return CollectionResult(new=new_count, updated=updated_count)
@@ -157,7 +165,7 @@ class JobStore(AbstractContextManager["JobStore"]):
             f"""
             SELECT source, external_id, company, title, location, url,
                    work_mode, remote_scope, published_at, collected_at, state,
-                   source_key, full_remote
+                   source_key, full_remote, remote_eligibility
             FROM jobs
             {where}
             ORDER BY company COLLATE NOCASE, title COLLATE NOCASE, external_id
@@ -178,6 +186,7 @@ class JobStore(AbstractContextManager["JobStore"]):
                     collected_at=_datetime(row[9]),
                     source_key=row[11],
                     full_remote=bool(row[12]),
+                    remote_eligibility=row[13],
                 ),
                 state=row[10],
             )

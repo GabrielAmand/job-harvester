@@ -7,7 +7,7 @@ from pathlib import Path
 import sqlite3
 
 from job_harvester.config import Filters
-from job_harvester.filters import is_relevant
+from job_harvester.filters import is_relevant, seniority_category
 from job_harvester.models import Job
 from job_harvester.revalidation import JobRevalidator
 from job_harvester.storage import JobStore, _datetime, _timestamp
@@ -113,6 +113,7 @@ class BatchStore(AbstractContextManager["BatchStore"]):
             SELECT bj.position, j.source, j.external_id, j.company, j.title,
                    j.location, j.url, j.work_mode, j.remote_scope,
                    j.published_at, j.collected_at, j.source_key, j.full_remote,
+                   j.remote_eligibility,
                    COALESCE(r.review_state, 'pending'), r.decision
             FROM batch_jobs bj
             JOIN jobs j ON j.id = bj.job_id
@@ -130,8 +131,9 @@ class BatchStore(AbstractContextManager["BatchStore"]):
                     remote_scope=row[8], published_at=_datetime(row[9]),
                     collected_at=_datetime(row[10]), source_key=row[11],
                     full_remote=bool(row[12]),
+                    remote_eligibility=row[13],
                 ),
-                review_state=row[13], decision=row[14],
+                review_state=row[14], decision=row[15],
             )
             for row in rows
         ]
@@ -325,10 +327,14 @@ def start_batch(
 
 def _candidate_key(job: Job) -> tuple[object, ...]:
     category = _priority_category(job)
+    seniority = {"normal": 0, "senior": 1, "strong": 2}[
+        seniority_category(job.title)
+    ]
     published = job.published_at.timestamp() if job.published_at else 0.0
     collected = job.discovered_at().timestamp()
     return (
         category[0],
+        seniority,
         job.published_at is None,
         -published,
         -collected,

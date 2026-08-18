@@ -42,6 +42,7 @@ class LeverTests(unittest.TestCase):
         self.assertEqual(jobs[0].source_key, "acme")
         self.assertEqual(jobs[0].location, "Remote - US")
         self.assertEqual((jobs[0].work_mode, jobs[0].remote_scope), ("remote", "restricted"))
+        self.assertEqual(jobs[0].remote_eligibility, "incompatible")
         self.assertIsNone(jobs[0].published_at)
         self.assertEqual((jobs[1].work_mode, jobs[1].remote_scope), ("hybrid", "unknown"))
 

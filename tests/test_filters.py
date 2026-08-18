@@ -1,7 +1,7 @@
 import unittest
 
 from job_harvester.config import Filters
-from job_harvester.filters import is_relevant
+from job_harvester.filters import is_relevant, seniority_category
 from job_harvester.models import Job
 
 
@@ -65,3 +65,63 @@ class FilterTests(unittest.TestCase):
         self.assertFalse(is_relevant(mode("unknown"), required))
         self.assertFalse(is_relevant(mode("hybrid"), required))
         self.assertFalse(is_relevant(mode("onsite"), required))
+
+    def test_default_out_of_scope_role_phrases_use_title_only(self) -> None:
+        filters = Filters(positive_title_keywords=("manager", "engineer"))
+        excluded = (
+            "Technical Program Manager", "Product Manager", "Product Management, Cloud",
+            "Project Manager",
+            "Engineering Manager", "Director of Infrastructure", "Head of Cloud",
+            "Vice President of Platform", "VP Infrastructure",
+        )
+        for title in excluded:
+            with self.subTest(title=title):
+                self.assertFalse(is_relevant(job(title), filters))
+        for title in ("DevOps Engineer", "Cloud Engineer", "Production Engineer"):
+            with self.subTest(title=title):
+                self.assertTrue(is_relevant(job(title), filters))
+
+    def test_explicit_incompatible_geography_is_rejected_but_unknown_is_not(self) -> None:
+        filters = Filters(positive_title_keywords=("cloud",))
+        incompatible = Job(
+            "greenhouse", "us", "Acme", "Cloud Engineer", "Remote — US only",
+            "https://job/us", work_mode="remote", remote_scope="restricted",
+            remote_eligibility="incompatible",
+        )
+        unclear = Job(
+            "greenhouse", "unclear", "Acme", "Cloud Engineer", "Remote",
+            "https://job/unclear", work_mode="remote", remote_scope="restricted",
+        )
+        self.assertFalse(is_relevant(incompatible, filters))
+        self.assertTrue(is_relevant(unclear, filters))
+        self.assertTrue(is_relevant(
+            incompatible,
+            Filters(
+                positive_title_keywords=("cloud",),
+                exclude_incompatible_remote=False,
+            ),
+        ))
+
+    def test_seniority_categories_are_title_only_and_deterministic(self) -> None:
+        cases = {
+            "DevOps Engineer": "normal",
+            "Senior DevOps Engineer": "senior",
+            "Principal DevOps Engineer": "strong",
+            "Staff Platform Engineer": "strong",
+            "Lead DevOps Engineer": "strong",
+            "Cloud Architect": "normal",
+            "Enterprise Architect": "strong",
+        }
+        for title, expected in cases.items():
+            with self.subTest(title=title):
+                self.assertEqual(seniority_category(title), expected)
+
+    def test_strong_seniority_is_excluded_by_default_and_can_be_enabled(self) -> None:
+        strong = job("Staff Cloud Engineer")
+        default = Filters(positive_title_keywords=("cloud",))
+        enabled = Filters(
+            positive_title_keywords=("cloud",), allow_strong_seniority=True
+        )
+        self.assertFalse(is_relevant(strong, default))
+        self.assertTrue(is_relevant(strong, enabled))
+        self.assertTrue(is_relevant(job("Senior Cloud Engineer"), default))

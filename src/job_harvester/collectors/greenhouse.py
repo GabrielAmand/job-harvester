@@ -71,7 +71,7 @@ class GreenhouseCollector:
                 raise CollectionError(
                     f"Greenhouse job at index {index} has no valid {name}"
                 )
-        work_mode, remote_scope, full_remote = classify_work_mode(raw)
+        work_mode, remote_scope, full_remote, remote_eligibility = classify_work_mode(raw)
         return Job(
             source="greenhouse",
             external_id=str(job_id),
@@ -82,5 +82,6 @@ class GreenhouseCollector:
             work_mode=work_mode,
             remote_scope=remote_scope,
             full_remote=full_remote,
+            remote_eligibility=remote_eligibility,
             source_key=self.board_token,
         )

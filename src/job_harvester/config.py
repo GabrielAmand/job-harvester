@@ -35,6 +35,19 @@ class Filters:
     remote_policy: str = "any"
     allow_hybrid: bool = True
     allow_onsite: bool = True
+    exclude_incompatible_remote: bool = True
+    allow_strong_seniority: bool = False
+    excluded_title_phrases: tuple[str, ...] = (
+        "program manager",
+        "product manager",
+        "product management",
+        "project manager",
+        "engineering manager",
+        "director",
+        "head of",
+        "vice president",
+        "vp",
+    )
 
 
 @dataclass(frozen=True, slots=True)
@@ -149,5 +162,22 @@ def load_config(path: str | Path) -> Config:
         remote_policy=remote_policy,
         allow_hybrid=_boolean(raw_filters.get("allow_hybrid"), "allow_hybrid", True),
         allow_onsite=_boolean(raw_filters.get("allow_onsite"), "allow_onsite", True),
+        exclude_incompatible_remote=_boolean(
+            raw_filters.get("exclude_incompatible_remote"),
+            "exclude_incompatible_remote",
+            True,
+        ),
+        allow_strong_seniority=_boolean(
+            raw_filters.get("allow_strong_seniority"),
+            "allow_strong_seniority",
+            False,
+        ),
+        excluded_title_phrases=(
+            _keyword_list(
+                raw_filters.get("excluded_title_phrases"), "excluded_title_phrases"
+            )
+            if "excluded_title_phrases" in raw_filters
+            else Filters().excluded_title_phrases
+        ),
     )
     return Config(tuple(sources), filters)

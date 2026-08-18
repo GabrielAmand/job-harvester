@@ -13,13 +13,15 @@ from job_harvester.storage import JobStore
 
 def make_job(identity: str, mode: str = "unknown", *, source: str = "greenhouse",
              published: datetime | None = None, scope: str = "unknown",
-             full_remote: bool = False) -> Job:
+             full_remote: bool = False, title: str | None = None,
+             eligibility: str = "unknown") -> Job:
     return Job(
-        source, identity, "Acme", f"Platform Engineer {identity}", "Paris",
+        source, identity, "Acme", title or f"Platform Engineer {identity}", "Paris",
         f"https://jobs/{identity}", work_mode=mode, remote_scope=scope,
         full_remote=full_remote, published_at=published,
         collected_at=datetime(2026, 1, 1, tzinfo=timezone.utc),
         source_key="acme" if source != "france_travail" else None,
+        remote_eligibility=eligibility,
     )
 
 
@@ -97,6 +99,78 @@ class BatchTests(unittest.TestCase):
         checker = FakeRevalidator()
         start_batch(self.database, self.filters, limit=3, revalidator=checker)
         self.assertEqual(checker.seen, ["c", "a", "b"])
+
+    def test_remote_category_precedes_seniority(self) -> None:
+        filters = Filters(
+            positive_title_keywords=("platform",), allow_strong_seniority=True
+        )
+        self.seed([
+            make_job("strong", "remote", scope="france", full_remote=True,
+                     title="Principal Platform Engineer"),
+            make_job("senior", "remote", scope="france", full_remote=True,
+                     title="Senior Platform Engineer"),
+            make_job("normal", "onsite", title="Platform Engineer"),
+        ])
+        checker = FakeRevalidator()
+        start_batch(self.database, filters, limit=3, revalidator=checker)
+        self.assertEqual(checker.seen, ["senior", "strong", "normal"])
+
+    def test_seniority_orders_jobs_within_the_same_remote_category(self) -> None:
+        filters = Filters(
+            positive_title_keywords=("platform",), allow_strong_seniority=True
+        )
+        self.seed([
+            make_job("strong", "remote", scope="france",
+                     title="Principal Platform Engineer"),
+            make_job("senior", "remote", scope="france",
+                     title="Senior Platform Engineer"),
+            make_job("normal", "remote", scope="france",
+                     title="Platform Engineer"),
+        ])
+        checker = FakeRevalidator()
+        start_batch(self.database, filters, limit=3, revalidator=checker)
+        self.assertEqual(checker.seen, ["normal", "senior", "strong"])
+
+    def test_strong_seniority_does_not_fill_normal_batches_by_default(self) -> None:
+        self.seed([
+            make_job("strong", "remote", title="Staff Platform Engineer"),
+            make_job("senior", "remote", title="Senior Platform Engineer"),
+        ])
+        checker = FakeRevalidator()
+        result = start_batch(self.database, self.filters, limit=2, revalidator=checker)
+        self.assertEqual(checker.seen, ["senior"])
+        self.assertEqual([entry.job.external_id for entry in result.entries], ["senior"])
+
+    def test_disallowed_onsite_jobs_are_removed_before_ordering(self) -> None:
+        self.seed([
+            make_job("onsite", "onsite", title="Platform Engineer"),
+            make_job("remote", "remote", title="Senior Platform Engineer"),
+        ])
+        filters = Filters(
+            positive_title_keywords=("platform",),
+            remote_policy="prefer",
+            allow_hybrid=True,
+            allow_onsite=False,
+        )
+        checker = FakeRevalidator()
+        result = start_batch(self.database, filters, limit=2, revalidator=checker)
+        self.assertEqual(checker.seen, ["remote"])
+        self.assertEqual([entry.job.external_id for entry in result.entries], ["remote"])
+
+    def test_incompatible_remote_and_out_of_scope_jobs_never_enter_batch(self) -> None:
+        self.seed([
+            make_job("good", "remote", title="Platform Engineer"),
+            make_job("us", "remote", scope="restricted",
+                     title="Platform Engineer", eligibility="incompatible"),
+            make_job("tpm", "remote", title="Technical Program Manager, Platform"),
+            make_job("us-tpm", "remote", scope="restricted",
+                     title="Technical Program Manager, Infrastructure",
+                     eligibility="incompatible"),
+        ])
+        checker = FakeRevalidator()
+        result = start_batch(self.database, self.filters, limit=10, revalidator=checker)
+        self.assertEqual(checker.seen, ["good"])
+        self.assertEqual(result.pending_candidates, 1)
 
     def test_expired_jobs_are_replaced_and_reviewed_jobs_do_not_return(self) -> None:
         self.seed([make_job(str(i), "remote") for i in range(4)])

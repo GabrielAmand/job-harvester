@@ -98,7 +98,7 @@ class WorkModeTests(unittest.TestCase):
                 "workplaceType": "remote",
                 "descriptionPlain": "Work in the office.",
             }),
-            ("remote", "restricted", False),
+            ("remote", "restricted", False, "incompatible"),
         )
         self.assertEqual(
             classify_lever_work_mode({
@@ -106,7 +106,7 @@ class WorkModeTests(unittest.TestCase):
                 "categories": {"location": "Remote"},
                 "workplaceType": "remote",
             }),
-            ("remote", "unknown", False),
+            ("remote", "unknown", False, "unknown"),
         )
         self.assertEqual(
             classify_lever_work_mode({
@@ -115,7 +115,7 @@ class WorkModeTests(unittest.TestCase):
                 "country": "US",
                 "workplaceType": "remote",
             }),
-            ("remote", "restricted", False),
+            ("remote", "restricted", False, "unknown"),
         )
 
     def test_lever_unspecified_falls_back_conservatively(self) -> None:
@@ -126,7 +126,7 @@ class WorkModeTests(unittest.TestCase):
                 "workplaceType": "unspecified",
                 "descriptionPlain": "This is a hybrid role.",
             }),
-            ("hybrid", "unknown", False),
+            ("hybrid", "unknown", False, "unknown"),
         )
 
     def test_france_travail_structured_telework_has_priority(self) -> None:
@@ -137,7 +137,7 @@ class WorkModeTests(unittest.TestCase):
                 "teletravail": {"libelle": "Télétravail total"},
                 "lieuTravail": {"libelle": "75 - Paris", "codePostal": "75001"},
             }),
-            ("remote", "france", True),
+            ("remote", "france", True, "compatible"),
         )
         self.assertEqual(
             classify_france_travail_work_mode({
@@ -146,7 +146,7 @@ class WorkModeTests(unittest.TestCase):
                 "teletravail": "Télétravail possible selon accord",
                 "lieuTravail": {"libelle": "75 - Paris", "codePostal": "75001"},
             }),
-            ("unknown", "unknown", False),
+            ("unknown", "unknown", False, "unknown"),
         )
         self.assertEqual(
             classify_france_travail_work_mode({
@@ -155,7 +155,7 @@ class WorkModeTests(unittest.TestCase):
                 "teletravail": "Non précisé",
                 "lieuTravail": {"libelle": "France"},
             }),
-            ("remote", "france", False),
+            ("remote", "france", False, "compatible"),
         )
 
     def test_explicit_full_remote_detection_is_conservative(self) -> None:
@@ -189,5 +189,37 @@ class WorkModeTests(unittest.TestCase):
                 "title": "Ingénieur", "location": {"name": "France"},
                 "content": "Poste en 100% télétravail, basé en France.",
             }),
-            ("remote", "france", True),
+            ("remote", "france", True, "compatible"),
         )
+
+    def test_geographic_eligibility_is_explicit_and_conservative(self) -> None:
+        cases = [
+            ("Remote — France", "compatible"),
+            ("Remote — Europe", "compatible"),
+            ("Remote — Worldwide", "compatible"),
+            ("Remote — US only", "incompatible"),
+            ("Remote — Canada only", "incompatible"),
+            ("Remote — California only", "incompatible"),
+            ("Remote", "unknown"),
+        ]
+        for location, expected in cases:
+            with self.subTest(location=location):
+                self.assertEqual(classify_work_mode({
+                    "title": "Engineer", "location": {"name": location}
+                })[3], expected)
+        self.assertEqual(classify_work_mode({
+            "title": "Engineer", "location": {"name": "Remote"},
+            "content": "Applicants must reside in the US.",
+        })[3], "incompatible")
+        self.assertEqual(classify_work_mode({
+            "title": "Engineer", "location": {"name": "Remote"},
+            "content": "US residents only.",
+        })[3], "incompatible")
+        self.assertEqual(classify_work_mode({
+            "title": "Engineer", "location": {"name": "Remote"},
+            "content": "US-based candidates only.",
+        })[3], "incompatible")
+        self.assertEqual(classify_work_mode({
+            "title": "Engineer", "location": {"name": "Remote — restricted"},
+            "content": "Some timezone restrictions apply.",
+        })[3], "unknown")

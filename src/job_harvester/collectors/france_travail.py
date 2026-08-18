@@ -188,7 +188,7 @@ class FranceTravailCollector:
         if not isinstance(url, str) or not url.startswith(("https://", "http://")):
             url = f"https://candidat.francetravail.fr/offres/recherche/detail/{offer_id.strip()}"
         published_at = self._published_at(raw.get("dateCreation"), offer_id)
-        work_mode, remote_scope, full_remote = classify_france_travail_work_mode(raw)
+        work_mode, remote_scope, full_remote, remote_eligibility = classify_france_travail_work_mode(raw)
         return Job(
             source="france_travail",
             external_id=offer_id.strip(),
@@ -200,6 +200,7 @@ class FranceTravailCollector:
             work_mode=work_mode,
             remote_scope=remote_scope,
             full_remote=full_remote,
+            remote_eligibility=remote_eligibility,
         )
 
     @staticmethod

@@ -41,14 +41,23 @@ positive_title_keywords = [
   "ci/cd",
 ]
 negative_title_keywords = [
+  # Add profile-specific title exclusions here.
+]
+excluded_title_phrases = [
+  "program manager",
+  "product manager",
+  "product management",
+  "project manager",
+  "engineering manager",
   "director",
   "head of",
   "vice president",
-  "principal",
-  "staff engineer",
+  "vp",
 ]
 # Omit or leave empty to accept every location.
 location_keywords = []
 remote_policy = "any" # any, prefer, or require
 allow_hybrid = true
 allow_onsite = true
+exclude_incompatible_remote = true
+allow_strong_seniority = false
