@@ -131,3 +131,15 @@ class StorageTests(unittest.TestCase):
         self.assertEqual(
             record.job.collected_at, datetime(2026, 1, 1, tzinfo=timezone.utc)
         )
+        self.assertEqual(record.job.work_mode, "unknown")
+        self.assertEqual(record.job.remote_scope, "unknown")
+
+    def test_work_mode_and_scope_changes_are_updates(self) -> None:
+        with JobStore(self.database) as store:
+            store.upsert([make_job()])
+            result = store.upsert([
+                make_job(work_mode="remote", remote_scope="france")
+            ])
+            record = store.list_jobs()[0]
+        self.assertEqual(result.updated, 1)
+        self.assertEqual((record.job.work_mode, record.job.remote_scope), ("remote", "france"))

@@ -26,3 +26,6 @@ negative_title_keywords = [
 ]
 # Omit or leave empty to accept every location.
 location_keywords = []
+remote_policy = "any" # any, prefer, or require
+allow_hybrid = true
+allow_onsite = true

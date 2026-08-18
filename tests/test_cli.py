@@ -102,6 +102,8 @@ class CliTests(unittest.TestCase):
         self.assertEqual(document[0]["external_id"], "1")
         self.assertEqual(document[0]["state"], "new")
         self.assertIn("collected_at", document[0])
+        self.assertEqual(document[0]["work_mode"], "unknown")
+        self.assertEqual(document[0]["remote_scope"], "unknown")
 
     def test_export_can_write_to_file(self) -> None:
         with JobStore(self.database) as store:
@@ -115,3 +117,19 @@ class CliTests(unittest.TestCase):
         ])
         self.assertEqual(result, 0)
         self.assertEqual(json.loads(destination.read_text())[0]["title"], "Platform Engineer")
+
+    def test_prefer_policy_orders_work_modes_without_excluding_unknown(self) -> None:
+        self.config.write_text(self.config.read_text() + 'remote_policy = "prefer"\n')
+        modes = ("onsite", "unknown", "hybrid", "remote")
+        with JobStore(self.database) as store:
+            store.upsert([
+                Job(
+                    "greenhouse", str(index), "Acme", f"Platform {mode}", "Paris",
+                    f"https://job/{index}", work_mode=mode,
+                )
+                for index, mode in enumerate(modes)
+            ])
+        records = cli.relevant_jobs(self.config, self.database, new_only=False)
+        self.assertEqual([record.job.work_mode for record in records], [
+            "remote", "hybrid", "unknown", "onsite"
+        ])

@@ -14,7 +14,8 @@ class Job:
     title: str
     location: str
     url: str
-    remote_status: str | None = None
+    work_mode: str = "unknown"
+    remote_scope: str = "unknown"
     published_at: datetime | None = None
     collected_at: datetime | None = None
 

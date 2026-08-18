@@ -30,11 +30,15 @@ class ConfigTests(unittest.TestCase):
             '[[sources]]\ntype = "greenhouse"\ncompany = "Acme"\nboard_token = "acme"\n'
             '[filters]\npositive_title_keywords = ["cloud", "SRE"]\n'
             'negative_title_keywords = ["director"]\nlocation_keywords = ["Paris"]\n'
+            'remote_policy = "prefer"\nallow_hybrid = true\nallow_onsite = false\n'
         )
         filters = load_config(path).filters
         self.assertEqual(filters.positive_title_keywords, ("cloud", "SRE"))
         self.assertEqual(filters.negative_title_keywords, ("director",))
         self.assertEqual(filters.location_keywords, ("Paris",))
+        self.assertEqual(filters.remote_policy, "prefer")
+        self.assertTrue(filters.allow_hybrid)
+        self.assertFalse(filters.allow_onsite)
 
     def test_rejects_invalid_configuration(self) -> None:
         cases = [
@@ -45,6 +49,16 @@ class ConfigTests(unittest.TestCase):
                 '[[sources]]\ntype = "greenhouse"\ncompany = "Acme"\nboard_token = "a"\n'
                 '[filters]\npositive_title_keywords = "cloud"\n',
                 "array of strings",
+            ),
+            (
+                '[[sources]]\ntype = "greenhouse"\ncompany = "Acme"\nboard_token = "a"\n'
+                '[filters]\nremote_policy = "mostly"\n',
+                "remote_policy",
+            ),
+            (
+                '[[sources]]\ntype = "greenhouse"\ncompany = "Acme"\nboard_token = "a"\n'
+                '[filters]\nallow_hybrid = "yes"\n',
+                "boolean",
             ),
         ]
         for content, message in cases:

@@ -28,7 +28,7 @@ class GreenhouseTests(unittest.TestCase):
 
         jobs = GreenhouseCollector("Acme", "acme", opener=opener).collect()
         self.assertEqual(seen, {
-            "url": "https://boards-api.greenhouse.io/v1/boards/acme/jobs",
+            "url": "https://boards-api.greenhouse.io/v1/boards/acme/jobs?content=true",
             "timeout": 15.0,
         })
         self.assertEqual([(job.external_id, job.title) for job in jobs], [
@@ -37,7 +37,8 @@ class GreenhouseTests(unittest.TestCase):
         self.assertEqual(jobs[0].company, "Acme")
         self.assertEqual(jobs[0].location, "Paris, France")
         self.assertIsNone(jobs[0].published_at)
-        self.assertIsNone(jobs[0].remote_status)
+        self.assertEqual(jobs[0].work_mode, "unknown")
+        self.assertEqual(jobs[0].remote_scope, "unknown")
         self.assertEqual(jobs[1].location, "")
 
     def test_rejects_bad_responses(self) -> None:
@@ -57,4 +58,4 @@ class GreenhouseTests(unittest.TestCase):
 
     def test_escapes_board_token(self) -> None:
         collector = GreenhouseCollector("Acme", "not/a token")
-        self.assertTrue(collector.url.endswith("/not%2Fa%20token/jobs"))
+        self.assertTrue(collector.url.endswith("/not%2Fa%20token/jobs?content=true"))

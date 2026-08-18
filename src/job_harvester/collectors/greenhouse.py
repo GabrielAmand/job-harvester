@@ -5,6 +5,7 @@ from urllib.parse import quote
 from urllib.request import Request, urlopen
 
 from job_harvester.models import Job
+from job_harvester.work_mode import classify_work_mode
 
 
 class CollectionError(RuntimeError):
@@ -31,7 +32,7 @@ class GreenhouseCollector:
     @property
     def url(self) -> str:
         token = quote(self.board_token, safe="")
-        return f"https://boards-api.greenhouse.io/v1/boards/{token}/jobs"
+        return f"https://boards-api.greenhouse.io/v1/boards/{token}/jobs?content=true"
 
     def collect(self) -> list[Job]:
         request = Request(self.url, headers={"User-Agent": "job-harvester/0.1"})
@@ -76,6 +77,7 @@ class GreenhouseCollector:
                 raise CollectionError(
                     f"Greenhouse job at index {index} has no valid {name}"
                 )
+        work_mode, remote_scope = classify_work_mode(raw)
         return Job(
             source="greenhouse",
             external_id=str(job_id),
@@ -83,4 +85,6 @@ class GreenhouseCollector:
             title=title.strip(),
             location=location_name.strip() if isinstance(location_name, str) else "",
             url=absolute_url.strip(),
+            work_mode=work_mode,
+            remote_scope=remote_scope,
         )

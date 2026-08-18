@@ -19,6 +19,9 @@ class Filters:
     positive_title_keywords: tuple[str, ...] = ()
     negative_title_keywords: tuple[str, ...] = ()
     location_keywords: tuple[str, ...] = ()
+    remote_policy: str = "any"
+    allow_hybrid: bool = True
+    allow_onsite: bool = True
 
 
 @dataclass(frozen=True, slots=True)
@@ -44,6 +47,14 @@ def _keyword_list(raw: object, field: str) -> tuple[str, ...]:
             raise ConfigError(f"filters.{field}[{index}] must be a non-empty string")
         keywords.append(value.strip())
     return tuple(keywords)
+
+
+def _boolean(raw: object, field: str, default: bool) -> bool:
+    if raw is None:
+        return default
+    if not isinstance(raw, bool):
+        raise ConfigError(f"filters.{field} must be a boolean")
+    return raw
 
 
 def load_config(path: str | Path) -> Config:
@@ -76,6 +87,9 @@ def load_config(path: str | Path) -> Config:
     raw_filters = document.get("filters", {})
     if not isinstance(raw_filters, dict):
         raise ConfigError("filters must be a table")
+    remote_policy = raw_filters.get("remote_policy", "any")
+    if remote_policy not in {"any", "prefer", "require"}:
+        raise ConfigError('filters.remote_policy must be "any", "prefer", or "require"')
     filters = Filters(
         positive_title_keywords=_keyword_list(
             raw_filters.get("positive_title_keywords"), "positive_title_keywords"
@@ -86,5 +100,8 @@ def load_config(path: str | Path) -> Config:
         location_keywords=_keyword_list(
             raw_filters.get("location_keywords"), "location_keywords"
         ),
+        remote_policy=remote_policy,
+        allow_hybrid=_boolean(raw_filters.get("allow_hybrid"), "allow_hybrid", True),
+        allow_onsite=_boolean(raw_filters.get("allow_onsite"), "allow_onsite", True),
     )
     return Config(tuple(sources), filters)

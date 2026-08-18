@@ -50,7 +50,11 @@ def relevant_jobs(
     config = load_config(config_path)
     with JobStore(database_path) as store:
         stored = store.list_jobs(new_only=new_only)
-    return [record for record in stored if is_relevant(record.job, config.filters)]
+    records = [record for record in stored if is_relevant(record.job, config.filters)]
+    if config.filters.remote_policy == "prefer":
+        order = {"remote": 0, "hybrid": 1, "unknown": 2, "onsite": 3}
+        records.sort(key=lambda record: order[record.job.work_mode])
+    return records
 
 
 def run_list(config_path: Path, database_path: Path, *, new_only: bool) -> int:
@@ -61,7 +65,10 @@ def run_list(config_path: Path, database_path: Path, *, new_only: bool) -> int:
         job = record.job
         location = job.location or "Location not specified"
         print(f"[{record.state}] {job.company} — {job.title}")
-        print(f"{location} | {job.source}")
+        print(
+            f"{location} | {job.source} | "
+            f"{job.work_mode} ({job.remote_scope})"
+        )
         print(job.url)
     print(f"\n{len(records)} relevant job(s)." if records else "0 relevant jobs.")
     return 0
@@ -75,7 +82,8 @@ def _export_record(record: StoredJob) -> dict[str, str | None]:
         "company": job.company,
         "title": job.title,
         "location": job.location,
-        "remote_status": job.remote_status,
+        "work_mode": job.work_mode,
+        "remote_scope": job.remote_scope,
         "published_at": job.published_at.isoformat() if job.published_at else None,
         "url": job.url,
         "collected_at": job.collected_at.isoformat() if job.collected_at else None,

@@ -17,6 +17,8 @@ CREATE TABLE IF NOT EXISTS jobs (
     title TEXT NOT NULL,
     location TEXT NOT NULL,
     remote_status TEXT,
+    work_mode TEXT NOT NULL DEFAULT 'unknown',
+    remote_scope TEXT NOT NULL DEFAULT 'unknown',
     published_at TEXT,
     url TEXT NOT NULL,
     collected_at TEXT NOT NULL,
@@ -55,6 +57,14 @@ class JobStore(AbstractContextManager["JobStore"]):
             self.connection.execute(
                 "ALTER TABLE jobs ADD COLUMN state TEXT NOT NULL DEFAULT 'seen'"
             )
+        if "work_mode" not in columns:
+            self.connection.execute(
+                "ALTER TABLE jobs ADD COLUMN work_mode TEXT NOT NULL DEFAULT 'unknown'"
+            )
+        if "remote_scope" not in columns:
+            self.connection.execute(
+                "ALTER TABLE jobs ADD COLUMN remote_scope TEXT NOT NULL DEFAULT 'unknown'"
+            )
         self.connection.commit()
 
     def close(self) -> None:
@@ -71,7 +81,8 @@ class JobStore(AbstractContextManager["JobStore"]):
             for job in jobs:
                 existing = self.connection.execute(
                     """
-                    SELECT company, title, location, remote_status, published_at, url
+                    SELECT company, title, location, work_mode, remote_scope,
+                           published_at, url
                     FROM jobs WHERE source = ? AND external_id = ?
                     """,
                     (job.source, job.external_id),
@@ -81,7 +92,8 @@ class JobStore(AbstractContextManager["JobStore"]):
                     job.company,
                     job.title,
                     job.location,
-                    job.remote_status,
+                    job.work_mode,
+                    job.remote_scope,
                     _timestamp(job.published_at),
                     job.url,
                 )
@@ -97,13 +109,14 @@ class JobStore(AbstractContextManager["JobStore"]):
                     """
                     INSERT INTO jobs (
                         source, external_id, company, title, location,
-                        remote_status, published_at, url, collected_at, state
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        work_mode, remote_scope, published_at, url, collected_at, state
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     ON CONFLICT(source, external_id) DO UPDATE SET
                         company = excluded.company,
                         title = excluded.title,
                         location = excluded.location,
-                        remote_status = excluded.remote_status,
+                        work_mode = excluded.work_mode,
+                        remote_scope = excluded.remote_scope,
                         published_at = excluded.published_at,
                         url = excluded.url,
                         state = excluded.state
@@ -114,7 +127,8 @@ class JobStore(AbstractContextManager["JobStore"]):
                         job.company,
                         job.title,
                         job.location,
-                        job.remote_status,
+                        job.work_mode,
+                        job.remote_scope,
                         _timestamp(job.published_at),
                         job.url,
                         collected_at,
@@ -128,7 +142,7 @@ class JobStore(AbstractContextManager["JobStore"]):
         rows = self.connection.execute(
             f"""
             SELECT source, external_id, company, title, location, url,
-                   remote_status, published_at, collected_at, state
+                   work_mode, remote_scope, published_at, collected_at, state
             FROM jobs
             {where}
             ORDER BY company COLLATE NOCASE, title COLLATE NOCASE, external_id
@@ -143,11 +157,12 @@ class JobStore(AbstractContextManager["JobStore"]):
                     title=row[3],
                     location=row[4],
                     url=row[5],
-                    remote_status=row[6],
-                    published_at=_datetime(row[7]),
-                    collected_at=_datetime(row[8]),
+                    work_mode=row[6],
+                    remote_scope=row[7],
+                    published_at=_datetime(row[8]),
+                    collected_at=_datetime(row[9]),
                 ),
-                state=row[9],
+                state=row[10],
             )
             for row in rows
         ]

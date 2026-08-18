@@ -35,3 +35,33 @@ class FilterTests(unittest.TestCase):
 
     def test_no_positive_keywords_matches_nothing(self) -> None:
         self.assertFalse(is_relevant(job("Cloud Engineer"), Filters()))
+
+    def test_work_mode_policies_and_allow_flags(self) -> None:
+        def mode(value: str) -> Job:
+            return Job(
+                "greenhouse", value, "Acme", "Cloud Engineer", "", "https://job/1",
+                work_mode=value,
+            )
+
+        any_policy = Filters(positive_title_keywords=("cloud",), allow_onsite=False)
+        self.assertTrue(is_relevant(mode("remote"), any_policy))
+        self.assertTrue(is_relevant(mode("unknown"), any_policy))
+        self.assertTrue(is_relevant(mode("hybrid"), any_policy))
+        self.assertFalse(is_relevant(mode("onsite"), any_policy))
+
+        prefer = Filters(
+            positive_title_keywords=("cloud",), remote_policy="prefer",
+            allow_hybrid=False, allow_onsite=True,
+        )
+        self.assertTrue(is_relevant(mode("unknown"), prefer))
+        self.assertFalse(is_relevant(mode("hybrid"), prefer))
+        self.assertTrue(is_relevant(mode("onsite"), prefer))
+
+        required = Filters(
+            positive_title_keywords=("cloud",), remote_policy="require",
+            allow_hybrid=True, allow_onsite=True,
+        )
+        self.assertTrue(is_relevant(mode("remote"), required))
+        self.assertFalse(is_relevant(mode("unknown"), required))
+        self.assertFalse(is_relevant(mode("hybrid"), required))
+        self.assertFalse(is_relevant(mode("onsite"), required))

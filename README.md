@@ -4,8 +4,8 @@ Job Harvester will be a small, local-first CLI that collects public job offers,
 normalizes them, stores them in SQLite, and reports newly discovered listings.
 It will not require Career-Ops or any hosted service.
 
-> Status: V2 implemented with relevance filtering, collection state, terminal
-> inspection, and JSON export.
+> Status: V2.1 implemented with deterministic work-mode normalization and
+> remote-aware filtering in addition to the V2 workflow.
 
 ## Daily V2 workflow
 
@@ -76,6 +76,26 @@ location_keywords = ["france", "remote"] # optional; [] accepts all locations
 An absent or empty positive list matches no jobs. This prevents an incomplete
 filter configuration from exporting every stored listing accidentally.
 
+Work mode is normalized as `remote`, `hybrid`, `onsite`, or `unknown`. Remote
+scope is `france`, `europe`, `worldwide`, `restricted`, or `unknown`. Greenhouse
+does not expose a standard work-mode field, so Job Harvester conservatively
+checks exposed work-mode metadata, title/location, offices, and finally explicit
+phrases in the job description. Matching is boundary-aware and accent-insensitive;
+vague technical text such as “hybrid cloud” or “distributed systems” is ignored.
+
+```toml
+[filters]
+remote_policy = "any" # any, prefer, or require
+allow_hybrid = true
+allow_onsite = true
+```
+
+`any` retains remote and unknown jobs and applies the two explicit allow gates.
+`prefer` has the same eligibility behavior and orders output as remote, hybrid,
+unknown, then onsite. `require` accepts only explicitly remote jobs. Defaults are
+`any`, `true`, and `true`, preserving existing behavior when these settings are
+omitted.
+
 ## JSON export
 
 `export` writes a UTF-8 JSON array to standard output, or to the path supplied
@@ -89,7 +109,8 @@ then by external ID. Each object has this stable, intentionally flat shape:
   "company": "Example Company",
   "title": "Platform Engineer",
   "location": "Paris, France",
-  "remote_status": null,
+  "work_mode": "remote",
+  "remote_scope": "france",
   "published_at": null,
   "url": "https://boards.greenhouse.io/example/jobs/123",
   "collected_at": "2026-08-18T08:00:00+00:00",
@@ -177,7 +198,8 @@ The initial normalized record contains:
 - `company`
 - `title`
 - `location`
-- `remote_status` (nullable/unknown)
+- `work_mode` (`remote`, `hybrid`, `onsite`, or `unknown`)
+- `remote_scope` (`france`, `europe`, `worldwide`, `restricted`, or `unknown`)
 - `published_at` (nullable)
 - `url`
 - `collected_at` (UTC time first discovered)
