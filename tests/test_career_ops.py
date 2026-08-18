@@ -12,7 +12,9 @@ from job_harvester.career_ops import (
     evaluate_open_batch,
     external_id,
     result_path,
+    prepare_application_artifacts,
 )
+from job_harvester.applications import ApplicationStore
 from job_harvester.config import CareerOpsConfig, Filters
 from job_harvester.models import Job
 from job_harvester.storage import JobStore
@@ -311,6 +313,28 @@ class CareerOpsTests(unittest.TestCase):
         self.assertEqual(self.reviews(), [
             (job_id, "reviewed", "priority_candidate")
         ])
+
+    def test_application_preparation_reuses_force_artifacts_interface(self) -> None:
+        job_id = self.create_batch(1)[0]
+        evaluate_open_batch(
+            self.database, self.config,
+            runner=WritingRunner({job_id: completed_result(job_id, "review")}),
+        )
+        with ApplicationStore(self.database) as store:
+            store.decide(job_id, "apply")
+        cv = "output/cv/review.pdf"
+        (self.repository / cv).parent.mkdir(parents=True, exist_ok=True)
+        (self.repository / cv).write_bytes(b"%PDF fixture")
+        runner = WritingRunner({
+            job_id: completed_result(job_id, "review", cv_pdf_path=cv)
+        })
+        prepare_application_artifacts(
+            self.database, self.config, job_id, runner=runner,
+            revalidator=ActiveRevalidator(),
+        )
+        self.assertIn("--force-artifacts", runner.calls[0][0])
+        with ApplicationStore(self.database) as store:
+            self.assertEqual(store.get(job_id).state, "ready_to_apply")
 
     def test_requires_open_batch_and_valid_repository(self) -> None:
         with self.assertRaisesRegex(BatchError, "open batch"):

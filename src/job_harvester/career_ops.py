@@ -10,6 +10,7 @@ from typing import Callable
 from job_harvester.batches import BatchError, BatchStore
 from job_harvester.config import CareerOpsConfig
 from job_harvester.storage import _timestamp
+from job_harvester.revalidation import JobRevalidator
 
 
 CATEGORY_DECISIONS = {
@@ -74,6 +75,7 @@ def evaluate_open_batch(
     force: bool = False,
     runner: Runner = subprocess.run,
     progress: Progress | None = None,
+    revalidator: JobRevalidator | None = None,
 ) -> CareerOpsBatchResult:
     repository, script = _validate_integration(config)
     effective_limit = config.batch_size if limit is None else limit
@@ -146,10 +148,78 @@ def evaluate_open_batch(
                 job_id, position, company, title, relative_result, str(error)
             )
         _persist_evaluation(database, evaluation)
+        if evaluation.status == "completed":
+            from job_harvester.applications import synchronize_evaluation
+            synchronize_evaluation(
+                database, config, evaluation.job_id, revalidator=revalidator
+            )
         evaluations.append(evaluation)
         if progress is not None:
             progress(index, total, evaluation)
     return CareerOpsBatchResult(tuple(evaluations), completed)
+
+
+def prepare_application_artifacts(
+    database: str | Path,
+    config: CareerOpsConfig,
+    job_id: int,
+    *,
+    runner: Runner = subprocess.run,
+    revalidator: JobRevalidator | None = None,
+) -> CareerOpsEvaluation:
+    """Ask Career-Ops to generate artifacts; Job Harvester never generates them."""
+    repository, script = _validate_integration(config)
+    from job_harvester.applications import ApplicationError, ApplicationStore
+    with ApplicationStore(database) as application_store:
+        application = application_store.get(job_id)
+    if application.category == "automatic_skip":
+        raise ApplicationError(f"job {job_id} is an automatic skip")
+    if application.state in {"applied", "declined"}:
+        raise ApplicationError(f"job {job_id} is {application.state}")
+    if application.category == "review" and application.decision != "apply":
+        raise ApplicationError(f"job {job_id} needs an explicit apply decision first")
+    with BatchStore(database) as store:
+        row = store.connection.execute(
+            """
+            SELECT j.id, COALESCE(bj.position, 0), j.company, j.title, j.url
+            FROM jobs j
+            LEFT JOIN batch_jobs bj ON bj.job_id=j.id
+            WHERE j.id=? ORDER BY bj.batch_id DESC LIMIT 1
+            """,
+            (job_id,),
+        ).fetchone()
+    if row is None:
+        raise CareerOpsError(f"job not found: {job_id}")
+    relative_result = result_path(job_id)
+    command = [
+        config.node_command, str(script), "--url", str(row[4]),
+        "--external-id", external_id(job_id), "--json-out", relative_result,
+        "--force-artifacts",
+    ]
+    try:
+        process = runner(
+            command, cwd=repository, capture_output=True, text=True, check=False
+        )
+        document = _read_result(repository / relative_result)
+        evaluation = _parse_result(
+            document, int(row[0]), int(row[1]), str(row[2]), str(row[3]), relative_result
+        )
+        if process.returncode != 0 and evaluation.status != "failed":
+            evaluation = _failed_evaluation(
+                int(row[0]), int(row[1]), str(row[2]), str(row[3]),
+                relative_result, _process_error(process),
+            )
+    except (OSError, json.JSONDecodeError, CareerOpsError) as error:
+        evaluation = _failed_evaluation(
+            int(row[0]), int(row[1]), str(row[2]), str(row[3]),
+            relative_result, str(error),
+        )
+    _persist_evaluation(database, evaluation)
+    if evaluation.status == "failed":
+        raise CareerOpsError(evaluation.error or "Career-Ops preparation failed")
+    from job_harvester.applications import synchronize_evaluation
+    synchronize_evaluation(database, config, job_id, revalidator=revalidator)
+    return evaluation
 
 
 def _validate_integration(config: CareerOpsConfig) -> tuple[Path, Path]:

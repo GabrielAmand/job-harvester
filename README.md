@@ -2,10 +2,11 @@
 
 Job Harvester will be a small, local-first CLI that collects public job offers,
 normalizes them, stores them in SQLite, and reports newly discovered listings.
-It will not require Career-Ops or any hosted service.
+Collection does not require Career-Ops or any hosted service. Evaluation and
+application-artifact preparation can optionally use a local Career-Ops checkout.
 
-> Status: V7 implemented with persistent, retryable Career-Ops evaluation of
-> open review batches and normalized result import.
+> Status: V8 implemented with a separate, persistent, human-approved
+> application workflow after Career-Ops evaluation.
 
 ## Collection workflow
 
@@ -118,6 +119,36 @@ reevaluates them. Failed processes or invalid results persist an integration
 error and leave the job `in_review`, so an ordinary later evaluation retries it.
 Evaluation never completes a batch automatically; run `batch complete` only
 after every entry has a completed evaluation or an explicit manual review.
+
+## Application workflow
+
+Application state is independent from collection state, batch review state, and
+the Career-Ops evaluation category. V8 never submits a form. It tracks only
+`not_started`, `needs_review`, `ready_to_apply`, `applied`, and `declined`.
+
+```console
+job-harvester application --database jobs.sqlite3 --config config.toml list
+job-harvester application --database jobs.sqlite3 --config config.toml decide 59 apply
+job-harvester application --database jobs.sqlite3 --config config.toml decide 72 skip
+job-harvester application --database jobs.sqlite3 --config config.toml prepare 59
+job-harvester application --database jobs.sqlite3 --config config.toml reopen 72
+job-harvester application --database jobs.sqlite3 --config config.toml open 59
+job-harvester application --database jobs.sqlite3 --config config.toml mark-applied 59
+```
+
+Automatic skips remain outside the application queue. Review results wait for
+an explicit `decide`. Good and priority candidates become ready only when the
+Career-Ops recommendation matches, the referenced CV PDF exists, and the live
+source revalidation succeeds. `prepare` and an accepted review reuse
+Career-Ops' `evaluate-job.mjs --force-artifacts`; Job Harvester does not generate
+CVs. Temporary revalidation failures are retryable, while confirmed expiry is
+recorded without deleting evaluation or application history.
+
+`mark-applied` is the sole transition to `applied`. It revalidates once more,
+records the explicit action time and an application-time snapshot, then uses
+Career-Ops' supported `set-status.mjs` interface when available. A tracker-sync
+failure is reported as pending and never rolls back Job Harvester's authoritative
+application record.
 
 ## Filtering
 

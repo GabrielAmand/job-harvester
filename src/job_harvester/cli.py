@@ -11,6 +11,13 @@ from job_harvester.career_ops import (
     CareerOpsError,
     CareerOpsEvaluation,
     evaluate_open_batch,
+    prepare_application_artifacts,
+)
+from job_harvester.applications import (
+    ApplicationError,
+    ApplicationStore,
+    mark_applied,
+    synchronize_evaluation,
 )
 from job_harvester.collectors.base import CollectionError
 from job_harvester.collectors.france_travail import FranceTravailCollector
@@ -92,6 +99,34 @@ def build_parser() -> argparse.ArgumentParser:
     batch_commands.add_parser("complete", help="complete the open batch")
     batch_commands.add_parser("abandon", help="abandon the open batch")
     batch_commands.add_parser("list", help="list current and previous batches")
+    application = subparsers.add_parser(
+        "application", help="manage the human-approved application workflow"
+    )
+    application.add_argument("--database", type=Path, default=Path("jobs.sqlite3"))
+    application.add_argument("--config", type=Path, default=Path("config.toml"))
+    application_commands = application.add_subparsers(
+        dest="application_command", required=True
+    )
+    application_commands.add_parser("list", help="show jobs needing application action")
+    decide = application_commands.add_parser("decide", help="decide a needs-review job")
+    decide.add_argument("job_id", type=int)
+    decide.add_argument("decision", choices=("apply", "skip"))
+    prepare = application_commands.add_parser(
+        "prepare", help="ask Career-Ops to prepare missing application artifacts"
+    )
+    prepare.add_argument("job_id", type=int)
+    reopen = application_commands.add_parser(
+        "reopen", help="return an explicitly declined job to needs review"
+    )
+    reopen.add_argument("job_id", type=int)
+    applied = application_commands.add_parser(
+        "mark-applied", help="confirm that the user submitted an application"
+    )
+    applied.add_argument("job_id", type=int)
+    open_job = application_commands.add_parser(
+        "open", help="print application URL and Career-Ops artifact locations"
+    )
+    open_job.add_argument("job_id", type=int)
     return parser
 
 
@@ -338,6 +373,88 @@ def run_batch(args: argparse.Namespace) -> int:
     return 2
 
 
+def _artifact_path(repository: Path | None, value: str | None) -> str:
+    if value is None:
+        return "—"
+    return str(repository.resolve() / value) if repository is not None else value
+
+
+def run_application(args: argparse.Namespace) -> int:
+    config = load_config(args.config)
+    repository = config.career_ops.repository_path
+    if args.application_command == "list":
+        with ApplicationStore(args.database) as store:
+            applications = store.list_active()
+        groups = (
+            ("PRIORITY", [a for a in applications if a.state == "ready_to_apply" and a.category == "priority_candidate"]),
+            ("READY", [a for a in applications if a.state == "ready_to_apply" and a.category != "priority_candidate"]),
+            ("NEEDS REVIEW", [a for a in applications if a.state == "needs_review"]),
+            ("PREPARATION REQUIRED", [a for a in applications if a.state == "not_started"]),
+        )
+        for heading, entries in groups:
+            print(heading)
+            if not entries:
+                print("  —")
+            for item in entries:
+                score = f"{item.score:g}" if item.score is not None else "—"
+                artifact = item.report_path if heading == "NEEDS REVIEW" else item.cv_pdf_path
+                print(f"  {item.job_id} | {item.company} — {item.title} | score {score}")
+                print(f"     {_artifact_path(repository, artifact)} | {item.url}")
+                if heading == "PREPARATION REQUIRED" and item.state_reason:
+                    print(f"     {item.state_reason}")
+        print(f"{len(applications)} active application item(s).")
+        return 0
+    if args.application_command == "open":
+        with ApplicationStore(args.database) as store:
+            item = store.get(args.job_id)
+        print(f"URL: {item.url}")
+        print(f"CV: {_artifact_path(repository, item.cv_pdf_path)}")
+        print(f"Report: {_artifact_path(repository, item.report_path)}")
+        return 0
+    if args.application_command == "decide":
+        with ApplicationStore(args.database) as store:
+            store.decide(args.job_id, args.decision)
+        if args.decision == "skip":
+            print(f"Declined job {args.job_id}.")
+            return 0
+        item = synchronize_evaluation(args.database, config.career_ops, args.job_id)
+        if item.state != "ready_to_apply":
+            prepare_application_artifacts(args.database, config.career_ops, args.job_id)
+            with ApplicationStore(args.database) as store:
+                item = store.get(args.job_id)
+        print(f"Job {args.job_id}: {item.state}.")
+        return 0
+    if args.application_command == "prepare":
+        item = synchronize_evaluation(
+            args.database, config.career_ops, args.job_id
+        )
+        if item.state != "ready_to_apply":
+            prepare_application_artifacts(
+                args.database, config.career_ops, args.job_id
+            )
+        with ApplicationStore(args.database) as store:
+            item = store.get(args.job_id)
+        print(f"Job {args.job_id}: {item.state}.")
+        return 0
+    if args.application_command == "reopen":
+        with ApplicationStore(args.database) as store:
+            store.reopen(args.job_id)
+        print(f"Reopened job {args.job_id}: needs_review.")
+        return 0
+    if args.application_command == "mark-applied":
+        result = mark_applied(args.database, config.career_ops, args.job_id)
+        print(
+            f"Applied: {result.application.company} — {result.application.title} "
+            f"at {result.application.applied_at.isoformat()}."
+        )
+        if result.tracker_synchronized:
+            print("Career-Ops tracker synchronized to Applied.")
+        else:
+            print(f"Career-Ops tracker synchronization pending: {result.tracker_error}")
+        return 0
+    return 2
+
+
 def relevant_jobs(
     config_path: Path, database_path: Path, *, new_only: bool
 ) -> list[StoredJob]:
@@ -424,6 +541,8 @@ def main(argv: Sequence[str] | None = None) -> int:
             return run_boards(args)
         if args.command == "batch":
             return run_batch(args)
+        if args.command == "application":
+            return run_application(args)
     except (
         ConfigError,
         CollectionError,
@@ -432,6 +551,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         BatchError,
         RevalidationError,
         CareerOpsError,
+        ApplicationError,
         sqlite3.Error,
         OSError,
     ) as error:
