@@ -8,7 +8,9 @@ import unittest
 
 from job_harvester.batches import BatchError, BatchStore, start_batch
 from job_harvester.career_ops import (
+    CareerOpsEvaluation,
     CareerOpsError,
+    _persist_evaluation,
     evaluate_open_batch,
     external_id,
     result_path,
@@ -328,13 +330,90 @@ class CareerOpsTests(unittest.TestCase):
         runner = WritingRunner({
             job_id: completed_result(job_id, "review", cv_pdf_path=cv)
         })
+        with BatchStore(self.database) as store:
+            before = store.connection.execute(
+                "SELECT career_ops_score, career_ops_category, career_ops_recommendation, "
+                "career_ops_tracker_id, career_ops_report_path FROM career_ops_evaluations "
+                "WHERE job_id=?", (job_id,),
+            ).fetchone()
         prepare_application_artifacts(
             self.database, self.config, job_id, runner=runner,
             revalidator=ActiveRevalidator(),
         )
         self.assertIn("--force-artifacts", runner.calls[0][0])
         with ApplicationStore(self.database) as store:
-            self.assertEqual(store.get(job_id).state, "ready_to_apply")
+            item = store.get(job_id)
+            self.assertEqual(item.state, "ready_to_apply")
+            self.assertEqual(item.preparation_status, "completed")
+        with BatchStore(self.database) as store:
+            after = store.connection.execute(
+                "SELECT career_ops_score, career_ops_category, career_ops_recommendation, "
+                "career_ops_tracker_id, career_ops_report_path FROM career_ops_evaluations "
+                "WHERE job_id=?", (job_id,),
+            ).fetchone()
+        self.assertEqual(after, before)
+
+    def test_preparation_failure_preserves_evaluation_and_apply_decision(self) -> None:
+        job_id = self.create_batch(1)[0]
+        evaluate_open_batch(
+            self.database, self.config,
+            runner=WritingRunner({job_id: completed_result(job_id, "review")}),
+        )
+        with ApplicationStore(self.database) as store:
+            store.decide(job_id, "apply")
+        with BatchStore(self.database) as store:
+            before = store.connection.execute(
+                "SELECT * FROM career_ops_evaluations WHERE job_id=?", (job_id,),
+            ).fetchone()
+        failed = lambda command, **kwargs: subprocess.CompletedProcess(
+            command, 1, "", "artifact generation failed"
+        )
+        with self.assertRaisesRegex(CareerOpsError, "artifact generation failed"):
+            prepare_application_artifacts(
+                self.database, self.config, job_id, runner=failed,
+                revalidator=ActiveRevalidator(),
+            )
+        with BatchStore(self.database) as store:
+            after = store.connection.execute(
+                "SELECT * FROM career_ops_evaluations WHERE job_id=?", (job_id,),
+            ).fetchone()
+        with ApplicationStore(self.database) as store:
+            item = store.get(job_id)
+        self.assertEqual(after, before)
+        self.assertEqual(item.decision, "apply")
+        self.assertEqual(item.state, "not_started")
+        self.assertEqual(item.preparation_status, "failed")
+        self.assertIn("artifact generation failed", item.preparation_error)
+
+    def test_preparation_restores_completed_result_after_legacy_corruption(self) -> None:
+        job_id = self.create_batch(1)[0]
+        evaluate_open_batch(
+            self.database, self.config,
+            runner=WritingRunner({job_id: completed_result(job_id, "review")}),
+        )
+        with ApplicationStore(self.database) as store:
+            store.decide(job_id, "apply")
+        _persist_evaluation(self.database, CareerOpsEvaluation(
+            job_id, 1, "Acme", "Platform Engineer", "failed", None, None,
+            None, None, f"output/evaluations/job-harvester-{job_id}.json",
+            None, None, None, None, "2026-08-19T12:00:00+00:00", "legacy failure",
+        ))
+        cv = "output/cv/recovered.pdf"
+        (self.repository / cv).parent.mkdir(parents=True, exist_ok=True)
+        (self.repository / cv).write_bytes(b"%PDF fixture")
+        prepare_application_artifacts(
+            self.database, self.config, job_id,
+            runner=WritingRunner({
+                job_id: completed_result(job_id, "review", cv_pdf_path=cv)
+            }),
+            revalidator=ActiveRevalidator(),
+        )
+        with ApplicationStore(self.database) as store:
+            item = store.get(job_id)
+        self.assertEqual(item.decision, "apply")
+        self.assertEqual(item.state, "ready_to_apply")
+        self.assertEqual(item.score, 4.1)
+        self.assertEqual(item.tracker_id, 7)
 
     def test_requires_open_batch_and_valid_repository(self) -> None:
         with self.assertRaisesRegex(BatchError, "open batch"):

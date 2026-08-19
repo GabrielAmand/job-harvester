@@ -446,6 +446,10 @@ def run_application(args: argparse.Namespace) -> int:
                 artifact = item.report_path if heading == "NEEDS REVIEW" else item.cv_pdf_path
                 print(f"  {item.job_id} | {item.company} — {item.title} | score {score}")
                 print(f"     {_artifact_path(repository, artifact)} | {item.url}")
+                if item.preparation_status:
+                    print(f"     preparation: {item.preparation_status}")
+                if item.preparation_error:
+                    print(f"     preparation error: {item.preparation_error}")
                 if heading == "PREPARATION REQUIRED" and item.state_reason:
                     print(f"     {item.state_reason}")
         print(f"{len(applications)} active application item(s).")
@@ -471,9 +475,18 @@ def run_application(args: argparse.Namespace) -> int:
         print(f"Job {args.job_id}: {item.state}.")
         return 0
     if args.application_command == "prepare":
-        item = synchronize_evaluation(
-            args.database, config.career_ops, args.job_id
-        )
+        try:
+            item = synchronize_evaluation(
+                args.database, config.career_ops, args.job_id
+            )
+        except ApplicationError as error:
+            if "completed Career-Ops evaluation not found" not in str(error):
+                raise
+            prepare_application_artifacts(
+                args.database, config.career_ops, args.job_id
+            )
+            with ApplicationStore(args.database) as store:
+                item = store.get(args.job_id)
         if item.state != "ready_to_apply":
             prepare_application_artifacts(
                 args.database, config.career_ops, args.job_id

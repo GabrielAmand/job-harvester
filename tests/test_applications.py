@@ -311,7 +311,7 @@ class ApplicationTests(unittest.TestCase):
             self.assertEqual(store.get(first).state, "needs_review")
             self.assertEqual(store.get(second).state, "needs_review")
         self.assertEqual(len(opened), 2)
-        self.assertIn("CV: unavailable", output.getvalue())
+        self.assertIn("CV not ready.", output.getvalue())
         self.assertIn("Deferred: 1", output.getvalue())
 
     def test_needs_review_apply_prepares_without_marking_applied(self) -> None:
@@ -401,6 +401,63 @@ class ApplicationTests(unittest.TestCase):
             ).fetchone()
         self.assertEqual((item.state, item.decision), ("declined", "skip"))
         self.assertEqual(event, ("ready_to_apply", "declined"))
+
+    def test_copy_url_and_windows_cv_path_do_not_mutate(self) -> None:
+        job_id = self.add_job()
+        cv = self.make_cv()
+        self.evaluate(job_id, "good_candidate", cv=cv)
+        synchronize_evaluation(
+            self.database, self.config, job_id, revalidator=Revalidator()
+        )
+        copied: list[str] = []
+        actions = iter(("u", "p", "q"))
+        output = io.StringIO()
+        application_session.run_session(
+            self.database, self.config, input_fn=lambda prompt: next(actions),
+            output=output, opener=lambda target: True,
+            copier=lambda value: copied.append(value) or True,
+            path_converter=lambda path: r"\\wsl.localhost\Ubuntu\cv.pdf",
+        )
+        with ApplicationStore(self.database) as store:
+            item = store.get(job_id)
+        self.assertEqual(item.state, "ready_to_apply")
+        self.assertIsNone(item.applied_at)
+        self.assertEqual(copied, [
+            "https://boards.greenhouse.io/acme/jobs/1",
+            r"\\wsl.localhost\Ubuntu\cv.pdf",
+        ])
+        self.assertIn("Application URL copied", output.getvalue())
+        self.assertIn("CV Windows path copied", output.getvalue())
+
+    def test_missing_cv_copy_fails_safely(self) -> None:
+        job_id = self.add_job()
+        self.evaluate(job_id, "review")
+        synchronize_evaluation(self.database, self.config, job_id)
+        actions = iter(("c", "q"))
+        copied: list[str] = []
+        output = io.StringIO()
+        application_session.run_session(
+            self.database, self.config, input_fn=lambda prompt: next(actions),
+            output=output, opener=lambda target: True,
+            copier=lambda value: copied.append(value) or True,
+        )
+        with ApplicationStore(self.database) as store:
+            self.assertEqual(store.get(job_id).state, "needs_review")
+        self.assertEqual(copied, [])
+        self.assertIn("CV not ready.", output.getvalue())
+
+    def test_windows_path_uses_wslpath_without_shell(self) -> None:
+        cv = self.repository / "output/cv.pdf"
+        cv.parent.mkdir(parents=True, exist_ok=True)
+        cv.write_bytes(b"%PDF")
+        process = subprocess.CompletedProcess(
+            ["wslpath"], 0, "\\\\wsl.localhost\\Ubuntu\\home\\cv.pdf\n", ""
+        )
+        with patch.object(application_session.shutil, "which", return_value="/usr/bin/wslpath"), \
+             patch.object(application_session.subprocess, "run", return_value=process) as run:
+            converted = application_session.windows_path(cv)
+        self.assertEqual(converted, r"\\wsl.localhost\Ubuntu\home\cv.pdf")
+        self.assertNotIn("shell", run.call_args.kwargs)
 
 
 if __name__ == "__main__":

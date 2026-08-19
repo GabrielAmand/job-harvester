@@ -7,6 +7,7 @@ from typing import Callable, TextIO
 
 from job_harvester.applications import (
     Application,
+    ApplicationError,
     ApplicationStore,
     AppliedResult,
     mark_applied,
@@ -18,6 +19,8 @@ from job_harvester.config import CareerOpsConfig
 
 Input = Callable[[str], str]
 Opener = Callable[[str | Path], bool]
+Copier = Callable[[str], bool]
+PathConverter = Callable[[Path], str | None]
 
 
 def _read_action(input_fn: Input, prompt: str) -> str:
@@ -43,6 +46,38 @@ def open_external(target: str | Path) -> bool:
         if process.returncode == 0:
             return True
     return False
+
+
+def copy_windows_clipboard(value: str) -> bool:
+    """Copy literal text through Windows interop without invoking a shell."""
+    executable = shutil.which("clip.exe")
+    if executable is None:
+        return False
+    try:
+        process = subprocess.run(
+            [executable], input=value, capture_output=True, text=True, check=False
+        )
+    except OSError:
+        return False
+    return process.returncode == 0
+
+
+def windows_path(path: Path) -> str | None:
+    """Return the Windows/UNC representation WSL exposes to file pickers."""
+    if not path.is_file():
+        return None
+    executable = shutil.which("wslpath")
+    if executable is None:
+        return None
+    try:
+        process = subprocess.run(
+            [executable, "-w", str(path.resolve())],
+            capture_output=True, text=True, check=False,
+        )
+    except OSError:
+        return None
+    converted = process.stdout.strip()
+    return converted if process.returncode == 0 and converted else None
 
 
 def artifact_path(repository: Path | None, value: str | None) -> Path | None:
@@ -74,6 +109,9 @@ def render_card(
     print(f"Category:       {item.category}", file=output)
     print(f"Recommendation: {item.recommendation}", file=output)
     print(f"State:          {item.state}", file=output)
+    print(f"Preparation:    {item.preparation_status or 'not started'}", file=output)
+    if item.preparation_error:
+        print(f"Prep error:     {item.preparation_error}", file=output)
     print(f"Report:         {report or '—'}", file=output)
     print(f"CV:             {cv or '—'}", file=output)
     print(f"Apply:          {item.url or '—'}", file=output)
@@ -90,7 +128,14 @@ def _open(target: str | Path | None, label: str, opener: Opener, output: TextIO)
 def _prepare(
     database: Path, config: CareerOpsConfig, job_id: int
 ) -> Application:
-    item = synchronize_evaluation(database, config, job_id)
+    try:
+        item = synchronize_evaluation(database, config, job_id)
+    except ApplicationError as error:
+        if "completed Career-Ops evaluation not found" not in str(error):
+            raise
+        prepare_application_artifacts(database, config, job_id)
+        with ApplicationStore(database) as store:
+            return store.get(job_id)
     if item.state != "ready_to_apply":
         prepare_application_artifacts(database, config, job_id)
     with ApplicationStore(database) as store:
@@ -104,6 +149,8 @@ def run_session(
     input_fn: Input = input,
     output: TextIO,
     opener: Opener = open_external,
+    copier: Copier = copy_windows_clipboard,
+    path_converter: PathConverter = windows_path,
 ) -> int:
     with ApplicationStore(database) as store:
         snapshot = store.list_session()
@@ -118,12 +165,14 @@ def run_session(
         with ApplicationStore(database) as store:
             item = store.get(original.job_id)
         render_card(database, config, item, index + 1, len(snapshot), output)
+        cv = artifact_path(config.repository_path, item.cv_pdf_path)
+        cv_ready = cv is not None and cv.is_file()
         if item.state == "needs_review":
-            actions = "[o] open job  [r] open report  [a] decide apply  [s] decline  [n] next  [q] quit"
+            actions = "[o] open application  [u] copy URL  [r] open report  [a] decide apply  [s] decline  [n] next  [q] quit"
         elif item.state == "ready_to_apply":
-            actions = "[o] open job  [c] open CV  [r] open report  [a] applied  [s] decline  [n] next  [q] quit"
+            actions = "[o] open application  [u] copy URL  [c] open CV  [p] copy CV path  [f] open CV folder  [r] open report  [a] applied  [s] decline  [n] next  [q] quit"
         else:
-            actions = "[a] retry preparation  [r] open report  [n] next  [q] quit"
+            actions = "[o] open application  [u] copy URL  [p] prepare CV  [r] open report  [n] next  [q] quit"
         print(actions, file=output)
         action = _read_action(input_fn, "Action: ")
         if action == "q":
@@ -133,10 +182,29 @@ def run_session(
             index += 1
             continue
         if action == "o":
-            _open(item.url, "Job URL", opener, output)
+            _open(item.url, "Application URL", opener, output)
+            continue
+        if action == "u":
+            if item.url and copier(item.url):
+                print("Application URL copied to clipboard.", file=output)
+            else:
+                print(f"Could not copy application URL.\n{item.url or 'Application URL unavailable.'}", file=output)
             continue
         if action == "c":
-            _open(artifact_path(config.repository_path, item.cv_pdf_path), "CV", opener, output)
+            if not cv_ready:
+                print("CV not ready.", file=output)
+            else:
+                _open(cv, "CV", opener, output)
+            continue
+        if action == "p" and cv_ready:
+            converted = path_converter(cv)
+            if converted and copier(converted):
+                print("CV Windows path copied to clipboard.", file=output)
+            else:
+                print(f"Could not copy CV Windows path.\nCV: {cv}", file=output)
+            continue
+        if action == "f" and cv_ready:
+            _open(cv.parent, "CV folder", opener, output)
             continue
         if action == "r":
             _open(artifact_path(config.repository_path, item.report_path), "Report", opener, output)
@@ -148,11 +216,14 @@ def run_session(
             print(f"Declined: {item.company} — {item.title}", file=output)
             index += 1
             continue
-        if action == "a" and item.state != "ready_to_apply":
+        if action in {"a", "p"} and item.state != "ready_to_apply":
             try:
-                if item.state == "needs_review":
+                if action == "a" and item.state == "needs_review":
                     with ApplicationStore(database) as store:
                         store.decide(item.job_id, "apply")
+                elif item.state == "needs_review":
+                    print("Choose apply before preparing a review-only CV.", file=output)
+                    continue
                 prepared = _prepare(database, config, item.job_id)
                 print(f"Job {item.job_id}: {prepared.state}.", file=output)
             except Exception as error:

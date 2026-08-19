@@ -40,6 +40,8 @@ class Application:
     report_path: str | None
     cv_pdf_path: str | None
     state_reason: str | None
+    preparation_status: str | None
+    preparation_error: str | None
     applied_at: datetime | None
 
 
@@ -87,6 +89,14 @@ CREATE TABLE IF NOT EXISTS application_events (
 );
 CREATE INDEX IF NOT EXISTS application_events_job_id
     ON application_events(job_id, id);
+CREATE TABLE IF NOT EXISTS application_preparations (
+    job_id INTEGER PRIMARY KEY,
+    status TEXT NOT NULL CHECK (status IN ('preparing', 'completed', 'failed')),
+    error TEXT,
+    attempted_at TEXT NOT NULL,
+    completed_at TEXT,
+    FOREIGN KEY (job_id) REFERENCES jobs(id)
+);
 """
 
 
@@ -159,7 +169,8 @@ class ApplicationStore(AbstractContextManager["ApplicationStore"]):
         """Return a stable snapshot of applications requiring human action."""
         rows = self.connection.execute(
             _APPLICATION_QUERY
-            + " WHERE a.state IN ('needs_review', 'ready_to_apply') "
+            + " WHERE (a.state IN ('needs_review', 'ready_to_apply') "
+              "OR (a.state='not_started' AND a.decision='apply')) "
               "AND NOT EXISTS (SELECT 1 FROM job_reviews r "
               "WHERE r.job_id=j.id AND r.review_state='expired') "
               "ORDER BY CASE "
@@ -264,6 +275,25 @@ class ApplicationStore(AbstractContextManager["ApplicationStore"]):
             )
             self._transition(job_id, "not_started", "job is expired")
 
+    def record_preparation(self, job_id: int, status: str, error: str | None = None) -> None:
+        if status not in {"preparing", "completed", "failed"}:
+            raise ApplicationError(f"unsupported preparation status: {status}")
+        now = _timestamp(datetime.now(timezone.utc))
+        completed_at = now if status == "completed" else None
+        with self.connection:
+            self.connection.execute(
+                """
+                INSERT INTO application_preparations (
+                    job_id, status, error, attempted_at, completed_at
+                ) VALUES (?, ?, ?, ?, ?)
+                ON CONFLICT(job_id) DO UPDATE SET
+                    status=excluded.status, error=excluded.error,
+                    attempted_at=excluded.attempted_at,
+                    completed_at=excluded.completed_at
+                """,
+                (job_id, status, error, now, completed_at),
+            )
+
     def mark_applied(self, job_id: int) -> Application:
         application = self.get(job_id)
         if application.state != "ready_to_apply":
@@ -349,9 +379,10 @@ SELECT j.id, a.state, a.decision, j.company, j.title, j.source, j.url,
        e.career_ops_score, e.career_ops_category, e.career_ops_recommendation,
        e.career_ops_tracker_id,
        e.career_ops_report_path, e.career_ops_cv_pdf_path, a.state_reason,
-       a.applied_at
+       p.status, p.error, a.applied_at
 FROM applications a JOIN jobs j ON j.id=a.job_id
 JOIN career_ops_evaluations e ON e.job_id=a.job_id
+LEFT JOIN application_preparations p ON p.job_id=a.job_id
 """
 
 
@@ -366,7 +397,9 @@ def _application(row: tuple[object, ...]) -> Application:
         report_path=str(row[11]) if row[11] is not None else None,
         cv_pdf_path=str(row[12]) if row[12] is not None else None,
         state_reason=str(row[13]) if row[13] is not None else None,
-        applied_at=_datetime(str(row[14])) if row[14] is not None else None,
+        preparation_status=str(row[14]) if row[14] is not None else None,
+        preparation_error=str(row[15]) if row[15] is not None else None,
+        applied_at=_datetime(str(row[16])) if row[16] is not None else None,
     )
 
 
