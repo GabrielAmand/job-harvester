@@ -67,6 +67,35 @@ def result_path(job_id: int) -> str:
     return f"output/evaluations/job-harvester-{job_id}.json"
 
 
+def restore_completed_evaluation(
+    database: str | Path, config: CareerOpsConfig, job_id: int
+) -> CareerOpsEvaluation:
+    """Reimport an authoritative completed schema-1.0 result without reevaluating."""
+    repository, _ = _validate_integration(config)
+    with BatchStore(database) as store:
+        row = store.connection.execute(
+            """
+            SELECT j.id, COALESCE(bj.position, 0), j.company, j.title
+            FROM jobs j LEFT JOIN batch_jobs bj ON bj.job_id=j.id
+            WHERE j.id=? ORDER BY bj.batch_id DESC LIMIT 1
+            """,
+            (job_id,),
+        ).fetchone()
+    if row is None:
+        raise CareerOpsError(f"job not found: {job_id}")
+    relative_result = result_path(job_id)
+    evaluation = _parse_result(
+        _read_result(repository / relative_result),
+        int(row[0]), int(row[1]), str(row[2]), str(row[3]), relative_result,
+    )
+    if evaluation.status != "completed":
+        raise CareerOpsError(
+            f"authoritative completed Career-Ops result not found: {job_id}"
+        )
+    _persist_evaluation(database, evaluation)
+    return evaluation
+
+
 def evaluate_open_batch(
     database: str | Path,
     config: CareerOpsConfig,
@@ -188,8 +217,37 @@ def prepare_application_artifacts(
             """,
             (job_id,),
         ).fetchone()
+        authoritative = store.connection.execute(
+            """
+            SELECT career_ops_status, career_ops_score, career_ops_category,
+                   career_ops_recommendation, career_ops_tracker_id,
+                   career_ops_report_path
+            FROM career_ops_evaluations WHERE job_id=?
+            """,
+            (job_id,),
+        ).fetchone()
     if row is None:
         raise CareerOpsError(f"job not found: {job_id}")
+    if authoritative is None or authoritative[0] != "completed":
+        try:
+            restore_completed_evaluation(database, config, job_id)
+        except (OSError, json.JSONDecodeError, CareerOpsError) as recovery_error:
+            error = f"completed Career-Ops evaluation not found: {job_id}; {recovery_error}"
+            with ApplicationStore(database) as application_store:
+                application_store.record_preparation(job_id, "failed", error)
+            raise CareerOpsError(error) from recovery_error
+        with BatchStore(database) as store:
+            authoritative = store.connection.execute(
+                """
+                SELECT career_ops_status, career_ops_score, career_ops_category,
+                       career_ops_recommendation, career_ops_tracker_id,
+                       career_ops_report_path
+                FROM career_ops_evaluations WHERE job_id=?
+                """,
+                (job_id,),
+            ).fetchone()
+    with ApplicationStore(database) as application_store:
+        application_store.record_preparation(job_id, "preparing")
     relative_result = result_path(job_id)
     command = [
         config.node_command, str(script), "--url", str(row[4]),
@@ -200,23 +258,31 @@ def prepare_application_artifacts(
         process = runner(
             command, cwd=repository, capture_output=True, text=True, check=False
         )
+        if process.returncode != 0:
+            raise CareerOpsError(_process_error(process))
         document = _read_result(repository / relative_result)
         evaluation = _parse_result(
             document, int(row[0]), int(row[1]), str(row[2]), str(row[3]), relative_result
         )
-        if process.returncode != 0 and evaluation.status != "failed":
-            evaluation = _failed_evaluation(
-                int(row[0]), int(row[1]), str(row[2]), str(row[3]),
-                relative_result, _process_error(process),
-            )
-    except (OSError, json.JSONDecodeError, CareerOpsError) as error:
-        evaluation = _failed_evaluation(
-            int(row[0]), int(row[1]), str(row[2]), str(row[3]),
-            relative_result, str(error),
+        if evaluation.status != "completed":
+            raise CareerOpsError(evaluation.error or "Career-Ops preparation failed")
+        preserved = (
+            evaluation.score, evaluation.category, evaluation.recommendation,
+            evaluation.tracker_id, evaluation.report_path,
         )
+        if preserved != tuple(authoritative[1:]):
+            raise CareerOpsError(
+                "Career-Ops preparation changed the authoritative evaluation identity"
+            )
+        if not evaluation.cv_pdf_path:
+            raise CareerOpsError("Career-Ops preparation completed without a CV PDF")
+    except (OSError, json.JSONDecodeError, CareerOpsError) as error:
+        with ApplicationStore(database) as application_store:
+            application_store.record_preparation(job_id, "failed", str(error))
+        raise CareerOpsError(str(error)) from error
     _persist_evaluation(database, evaluation)
-    if evaluation.status == "failed":
-        raise CareerOpsError(evaluation.error or "Career-Ops preparation failed")
+    with ApplicationStore(database) as application_store:
+        application_store.record_preparation(job_id, "completed")
     from job_harvester.applications import synchronize_evaluation
     synchronize_evaluation(database, config, job_id, revalidator=revalidator)
     return evaluation

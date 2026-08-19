@@ -7,7 +7,7 @@ import sqlite3
 import subprocess
 import tempfile
 import unittest
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 from job_harvester.applications import (
     ApplicationError,
@@ -402,32 +402,107 @@ class ApplicationTests(unittest.TestCase):
         self.assertEqual((item.state, item.decision), ("declined", "skip"))
         self.assertEqual(event, ("ready_to_apply", "declined"))
 
-    def test_copy_url_and_windows_cv_path_do_not_mutate(self) -> None:
+    def test_open_cv_invokes_file_opener_only(self) -> None:
         job_id = self.add_job()
-        cv = self.make_cv()
-        self.evaluate(job_id, "good_candidate", cv=cv)
+        cv_value = self.make_cv()
+        self.evaluate(job_id, "good_candidate", cv=cv_value)
         synchronize_evaluation(
             self.database, self.config, job_id, revalidator=Revalidator()
         )
-        copied: list[str] = []
-        actions = iter(("u", "p", "q"))
-        output = io.StringIO()
+        opener = Mock(return_value=True)
+        copier = Mock(return_value=True)
+        path_converter = Mock(return_value=r"\\wsl.localhost\Ubuntu\cv.pdf")
+        actions = iter(("c", "q"))
+
         application_session.run_session(
             self.database, self.config, input_fn=lambda prompt: next(actions),
-            output=output, opener=lambda target: True,
-            copier=lambda value: copied.append(value) or True,
-            path_converter=lambda path: r"\\wsl.localhost\Ubuntu\cv.pdf",
+            output=io.StringIO(), opener=opener, copier=copier,
+            path_converter=path_converter,
+        )
+
+        opener.assert_called_once_with(self.repository / cv_value)
+        path_converter.assert_not_called()
+        copier.assert_not_called()
+
+    def test_copy_windows_cv_path_uses_converter_and_clipboard_only(self) -> None:
+        job_id = self.add_job()
+        cv_value = self.make_cv()
+        self.evaluate(job_id, "good_candidate", cv=cv_value)
+        synchronize_evaluation(
+            self.database, self.config, job_id, revalidator=Revalidator()
+        )
+        opener = Mock(return_value=True)
+        copier = Mock(return_value=True)
+        converted = r"\\wsl.localhost\Ubuntu\cv.pdf"
+        path_converter = Mock(return_value=converted)
+        actions = iter(("p", "q"))
+        output = io.StringIO()
+        with ApplicationStore(self.database) as store:
+            events_before = store.connection.execute(
+                "SELECT COUNT(*) FROM application_events WHERE job_id=?", (job_id,)
+            ).fetchone()[0]
+        application_session.run_session(
+            self.database, self.config, input_fn=lambda prompt: next(actions),
+            output=output, opener=opener, copier=copier,
+            path_converter=path_converter,
         )
         with ApplicationStore(self.database) as store:
             item = store.get(job_id)
+            events_after = store.connection.execute(
+                "SELECT COUNT(*) FROM application_events WHERE job_id=?", (job_id,)
+            ).fetchone()[0]
         self.assertEqual(item.state, "ready_to_apply")
         self.assertIsNone(item.applied_at)
-        self.assertEqual(copied, [
-            "https://boards.greenhouse.io/acme/jobs/1",
-            r"\\wsl.localhost\Ubuntu\cv.pdf",
-        ])
-        self.assertIn("Application URL copied", output.getvalue())
-        self.assertIn("CV Windows path copied", output.getvalue())
+        self.assertEqual(events_after, events_before)
+        path_converter.assert_called_once_with(self.repository / cv_value)
+        copier.assert_called_once_with(converted)
+        opener.assert_not_called()
+        self.assertIn(
+            "CV Windows path copied to clipboard.", output.getvalue()
+        )
+
+    def test_copy_windows_cv_path_failures_are_safe_and_non_mutating(self) -> None:
+        for converted, copied in ((None, True), (r"C:\\cv.pdf", False)):
+            with self.subTest(converted=converted, copied=copied):
+                job_id = self.add_job(str(converted))
+                cv_value = self.make_cv(f"output/{job_id}.pdf")
+                self.evaluate(job_id, "good_candidate", cv=cv_value)
+                synchronize_evaluation(
+                    self.database, self.config, job_id, revalidator=Revalidator()
+                )
+                opener = Mock(return_value=True)
+                copier = Mock(return_value=copied)
+                path_converter = Mock(return_value=converted)
+                actions = iter(("p", "q"))
+                with ApplicationStore(self.database) as store:
+                    events_before = store.connection.execute(
+                        "SELECT COUNT(*) FROM application_events WHERE job_id=?",
+                        (job_id,),
+                    ).fetchone()[0]
+
+                output = io.StringIO()
+                application_session.run_session(
+                    self.database, self.config,
+                    input_fn=lambda prompt: next(actions), output=output,
+                    opener=opener, copier=copier,
+                    path_converter=path_converter,
+                )
+
+                with ApplicationStore(self.database) as store:
+                    item = store.get(job_id)
+                    events_after = store.connection.execute(
+                        "SELECT COUNT(*) FROM application_events WHERE job_id=?",
+                        (job_id,),
+                    ).fetchone()[0]
+                self.assertEqual(item.state, "ready_to_apply")
+                self.assertIsNone(item.applied_at)
+                self.assertEqual(events_after, events_before)
+                opener.assert_not_called()
+                if converted is None:
+                    copier.assert_not_called()
+                else:
+                    copier.assert_called_once_with(converted)
+                self.assertIn("Could not copy CV Windows path.", output.getvalue())
 
     def test_missing_cv_copy_fails_safely(self) -> None:
         job_id = self.add_job()
@@ -457,6 +532,26 @@ class ApplicationTests(unittest.TestCase):
              patch.object(application_session.subprocess, "run", return_value=process) as run:
             converted = application_session.windows_path(cv)
         self.assertEqual(converted, r"\\wsl.localhost\Ubuntu\home\cv.pdf")
+        run.assert_called_once_with(
+            ["/usr/bin/wslpath", "-w", str(cv.resolve())],
+            capture_output=True, text=True, check=False,
+        )
+        self.assertNotIn("shell", run.call_args.kwargs)
+
+    def test_windows_clipboard_copies_exact_value_without_shell(self) -> None:
+        value = r"\\wsl.localhost\Ubuntu\home\cv.pdf"
+        process = subprocess.CompletedProcess(["clip.exe"], 0, "", "")
+        with patch.object(
+            application_session.shutil, "which", return_value="/mnt/c/clip.exe"
+        ), patch.object(
+            application_session.subprocess, "run", return_value=process
+        ) as run:
+            copied = application_session.copy_windows_clipboard(value)
+        self.assertTrue(copied)
+        run.assert_called_once_with(
+            ["/mnt/c/clip.exe"], input=value, capture_output=True, text=True,
+            check=False,
+        )
         self.assertNotIn("shell", run.call_args.kwargs)
 
 

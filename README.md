@@ -5,7 +5,7 @@ normalizes them, stores them in SQLite, and reports newly discovered listings.
 Collection does not require Career-Ops or any hosted service. Evaluation and
 application-artifact preparation can optionally use a local Career-Ops checkout.
 
-> Status: V10.1 implemented with URL-only manual job import and an interactive,
+> Status: V10.2 implemented with URL-only manual job import and an interactive,
 > human-controlled application
 > session. Gmail ingestion remains read-only; Job Harvester never submits forms
 > or sends email.
@@ -155,8 +155,10 @@ job-harvester application --database jobs.sqlite3 --config config.toml mark-appl
 ```
 
 `session` takes a stable snapshot of eligible work, shows one opportunity at a
-time, and can open or print the stored job URL, CV, and report. Opening artifacts
-never changes state. A review decision may prepare artifacts but does not mean
+time, and can open or copy the stored job URL, open the CV/report, and copy a
+Windows-accessible CV path under WSL. URL and path clipboard actions use Windows
+interop without a shell. Opening or copying artifacts never changes state. A
+review decision may prepare artifacts but does not mean
 the application was submitted; only the separately confirmed `Applied` action
 records an application. `next` defers an item for the current session only.
 
@@ -167,6 +169,12 @@ source revalidation succeeds. `prepare` and an accepted review reuse
 Career-Ops' `evaluate-job.mjs --force-artifacts`; Job Harvester does not generate
 CVs. Temporary revalidation failures are retryable, while confirmed expiry is
 recorded without deleting evaluation or application history.
+
+Artifact preparation is tracked separately from the last successful evaluation.
+A failed retry preserves the authoritative score, category, recommendation,
+tracker, report, and explicit human decision, while retaining a retryable
+preparation error. Existing Career-Ops reports can regenerate missing CV artifacts
+without allocating a new report or changing the evaluation.
 
 `mark-applied` is the sole transition to `applied`. It revalidates once more,
 records the explicit action time and an application-time snapshot, then uses
