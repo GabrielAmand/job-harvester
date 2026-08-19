@@ -10,6 +10,7 @@ from job_harvester import cli
 from job_harvester.board_validation import ValidationResult
 from job_harvester.collectors.greenhouse import CollectionError
 from job_harvester.models import Job
+from job_harvester.revalidation import CandidateRevalidationError
 from job_harvester.registry import BoardRegistry
 from job_harvester.storage import JobStore
 
@@ -67,6 +68,33 @@ class CliTests(unittest.TestCase):
             self.assertEqual(cli.main(prefix + ["complete"]), 0)
         self.assertIn("batch size: 1", output.getvalue())
         self.assertIn("Completed batch 1", output.getvalue())
+
+    def test_batch_start_warns_when_revalidation_is_deferred(self) -> None:
+        with JobStore(self.database) as store:
+            store.upsert([
+                Job("france_travail", "bad", "Acme", "Platform Engineer",
+                    "Paris", "https://job/bad", work_mode="remote",
+                    full_remote=True, remote_scope="france"),
+                Job("greenhouse", "good", "Acme", "Platform Engineer",
+                    "Paris", "https://job/good", source_key="acme"),
+            ])
+        error = CandidateRevalidationError(
+            "France Travail offer bad returned invalid JSON"
+        )
+        def revalidate(candidate):
+            if candidate.external_id == "bad":
+                raise error
+            return True
+        stderr = io.StringIO()
+        with patch("job_harvester.batches.JobRevalidator.is_active", side_effect=revalidate), \
+             redirect_stderr(stderr):
+            result = cli.main([
+                "batch", "--database", str(self.database), "start",
+                "--config", str(self.config), "--limit", "1",
+            ])
+        self.assertEqual(result, 0)
+        self.assertIn("Skipped job bad for this batch:", stderr.getvalue())
+        self.assertIn("state preserved for retry.", stderr.getvalue())
 
     def test_batch_evaluate_cli_arguments(self) -> None:
         args = cli.build_parser().parse_args([

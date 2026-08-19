@@ -21,6 +21,10 @@ class RevalidationError(RuntimeError):
     """Raised when an offer's availability cannot be determined safely."""
 
 
+class CandidateRevalidationError(RevalidationError):
+    """Raised when one candidate is indeterminate but batch work may continue."""
+
+
 class JobRevalidator:
     def __init__(self, *, timeout: float = 15.0, opener: Opener = urlopen) -> None:
         self.timeout = timeout
@@ -77,11 +81,11 @@ class JobRevalidator:
         except HTTPError as error:
             if error.code in {404, 410}:
                 return False
-            raise RevalidationError(
+            raise CandidateRevalidationError(
                 f"manual job {job.external_id} returned HTTP {error.code}"
             ) from error
         except (URLError, TimeoutError, OSError) as error:
-            raise RevalidationError(
+            raise CandidateRevalidationError(
                 f"manual job {job.external_id} failed: {error}"
             ) from error
 
@@ -113,6 +117,8 @@ class JobRevalidator:
             raise RevalidationError(
                 f"France Travail authentication returned HTTP {error.code}"
             ) from error
+        except CandidateRevalidationError as error:
+            raise RevalidationError(str(error)) from error
         token = payload.get("access_token") if isinstance(payload, dict) else None
         if not isinstance(token, str) or not token:
             raise RevalidationError(
@@ -130,18 +136,33 @@ class JobRevalidator:
         except HTTPError as error:
             if error.code in {404, 410}:
                 return False
-            raise RevalidationError(f"{label} returned HTTP {error.code}") from error
+            raise CandidateRevalidationError(
+                f"{label} returned HTTP {error.code}"
+            ) from error
         if not isinstance(payload, dict):
-            raise RevalidationError(f"{label} response must be an object")
+            raise CandidateRevalidationError(f"{label} response must be an object")
         return True
 
     def _request_json(self, request: Request, label: str) -> object:
         try:
             with self.opener(request, timeout=self.timeout) as response:
-                return json.load(response)
+                body = response.read()
+                try:
+                    return json.loads(body)
+                except (json.JSONDecodeError, UnicodeDecodeError) as error:
+                    status = getattr(response, "status", None)
+                    headers = getattr(response, "headers", None)
+                    content_type = headers.get_content_type() if headers else None
+                    details = []
+                    if status is not None:
+                        details.append(f"HTTP {status}")
+                    if content_type:
+                        details.append(f"content-type {content_type}")
+                    suffix = f" ({', '.join(details)})" if details else ""
+                    raise CandidateRevalidationError(
+                        f"{label} returned invalid JSON{suffix}"
+                    ) from error
         except HTTPError:
             raise
         except (URLError, TimeoutError, OSError) as error:
-            raise RevalidationError(f"{label} failed: {error}") from error
-        except (json.JSONDecodeError, UnicodeDecodeError) as error:
-            raise RevalidationError(f"{label} returned invalid JSON") from error
+            raise CandidateRevalidationError(f"{label} failed: {error}") from error

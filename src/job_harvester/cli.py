@@ -323,6 +323,12 @@ def run_batch(args: argparse.Namespace) -> int:
     if args.batch_command == "start":
         config = load_config(args.config)
         result = start_batch(args.database, config.filters, limit=args.limit)
+        for job, reason in result.deferred:
+            print(
+                f"Skipped job {job.external_id} for this batch: {reason}; "
+                "state preserved for retry.",
+                file=sys.stderr,
+            )
         print(
             f"Pending candidates: {result.pending_candidates}; "
             f"revalidated: {result.revalidated}; expired: {result.expired}; "

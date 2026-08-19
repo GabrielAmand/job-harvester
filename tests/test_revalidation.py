@@ -58,6 +58,25 @@ class RevalidationTests(unittest.TestCase):
         with self.assertRaises(RevalidationError):
             checker.is_active(job("lever", source_key="acme"))
 
+    def test_france_travail_invalid_json_is_indeterminate(self) -> None:
+        responses = iter([Response(b'{"access_token":"token"}'), Response(b"not-json")])
+        checker = JobRevalidator(opener=lambda *a, **k: next(responses))
+        with patch.dict(os.environ, {
+            "FRANCE_TRAVAIL_CLIENT_ID": "id",
+            "FRANCE_TRAVAIL_CLIENT_SECRET": "secret",
+        }):
+            with self.assertRaisesRegex(RevalidationError, "returned invalid JSON"):
+                checker.is_active(job("france_travail"))
+
+    def test_gone_remains_expired_for_both_official_statuses(self) -> None:
+        for status in (404, 410):
+            with self.subTest(status=status):
+                error = HTTPError("https://job", status, "gone", {}, None)
+                checker = JobRevalidator(
+                    opener=lambda *a, **k: (_ for _ in ()).throw(error)
+                )
+                self.assertFalse(checker.is_active(job("lever", source_key="acme")))
+
     def test_missing_board_provenance_is_inconclusive(self) -> None:
         with self.assertRaisesRegex(RevalidationError, "collect it again"):
             JobRevalidator().is_active(job("greenhouse"))

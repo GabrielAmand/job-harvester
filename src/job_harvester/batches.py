@@ -9,7 +9,7 @@ import sqlite3
 from job_harvester.config import Filters
 from job_harvester.filters import is_relevant, seniority_category
 from job_harvester.models import Job
-from job_harvester.revalidation import JobRevalidator
+from job_harvester.revalidation import CandidateRevalidationError, JobRevalidator
 from job_harvester.storage import JobStore, _datetime, _timestamp
 
 
@@ -48,6 +48,7 @@ class BatchStartResult:
     revalidated: int
     expired: int
     entries: tuple[BatchEntry, ...]
+    deferred: tuple[tuple[Job, str], ...] = ()
 
 
 SCHEMA = """
@@ -357,15 +358,24 @@ def start_batch(
     checker = revalidator or JobRevalidator()
     selected: list[Job] = []
     expired: list[Job] = []
+    deferred: list[tuple[Job, str]] = []
     checked = 0
     for job in candidates:
         if len(selected) >= limit:
             break
-        active = checker.is_active(job)
         checked += 1
+        for attempt in range(2):
+            try:
+                active = checker.is_active(job)
+                break
+            except CandidateRevalidationError as error:
+                if attempt == 1:
+                    deferred.append((job, str(error)))
+        else:
+            continue
         (selected if active else expired).append(job)
-    # All review/expiry changes are committed together only after every attempted
-    # revalidation succeeded conclusively.
+    # Conclusive review/expiry changes are committed together. Deferred candidates
+    # are deliberately absent from both lists, so their stored state is untouched.
     with BatchStore(path) as batches:
         batch = batches.create(selected, expired, requested_limit=limit)
         entries = tuple(batches.entries(batch.id))
@@ -375,6 +385,7 @@ def start_batch(
         revalidated=checked,
         expired=len(expired),
         entries=entries,
+        deferred=tuple(deferred),
     )
 
 

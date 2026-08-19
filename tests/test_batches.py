@@ -7,7 +7,7 @@ import unittest
 from job_harvester.batches import BatchError, BatchStore, start_batch
 from job_harvester.config import Filters
 from job_harvester.models import Job
-from job_harvester.revalidation import RevalidationError
+from job_harvester.revalidation import CandidateRevalidationError, RevalidationError
 from job_harvester.storage import JobStore
 
 
@@ -187,15 +187,55 @@ class BatchTests(unittest.TestCase):
         second = start_batch(self.database, self.filters, limit=5, revalidator=FakeRevalidator())
         self.assertEqual([e.job.external_id for e in second.entries], ["3"])
 
-    def test_temporary_failure_is_fully_atomic(self) -> None:
-        self.seed([make_job("0"), make_job("1")])
-        checker = FakeRevalidator({"0": False, "1": RevalidationError("offline")})
-        with self.assertRaises(RevalidationError):
-            start_batch(self.database, self.filters, limit=2, revalidator=checker)
+    def test_temporary_failure_is_deferred_and_batch_remains_atomic(self) -> None:
+        self.seed([make_job("0"), make_job("1"), make_job("2")])
+        checker = FakeRevalidator({"0": CandidateRevalidationError("offline")})
+        result = start_batch(self.database, self.filters, limit=2, revalidator=checker)
+        self.assertEqual(checker.seen, ["0", "0", "1", "2"])
+        self.assertEqual([entry.job.external_id for entry in result.entries], ["1", "2"])
+        self.assertEqual([(job.external_id, reason) for job, reason in result.deferred],
+                         [("0", "offline")])
+        with BatchStore(self.database) as store:
+            state = store.connection.execute(
+                "SELECT r.review_state FROM jobs j LEFT JOIN job_reviews r ON r.job_id=j.id "
+                "WHERE j.external_id='0'"
+            ).fetchone()[0]
+        self.assertIsNone(state)
+
+    def test_repeated_malformed_candidate_does_not_block_later_candidates(self) -> None:
+        self.seed([make_job("0", source="france_travail"), make_job("1"), make_job("2")])
+        malformed = CandidateRevalidationError(
+            "France Travail offer 0 returned invalid JSON"
+        )
+        result = start_batch(
+            self.database, self.filters, limit=2,
+            revalidator=FakeRevalidator({"0": malformed}),
+        )
+        self.assertEqual(len(result.entries), 2)
+        self.assertEqual([entry.job.external_id for entry in result.entries], ["1", "2"])
+        self.assertEqual(result.expired, 0)
+        with BatchStore(self.database) as store:
+            row = store.connection.execute(
+                "SELECT r.review_state FROM jobs j LEFT JOIN job_reviews r ON r.job_id=j.id "
+                "WHERE j.external_id='0'"
+            ).fetchone()
+        self.assertIsNone(row[0])
+
+    def test_systemic_revalidation_failure_still_aborts_atomically(self) -> None:
+        self.seed([make_job("0")])
+        with self.assertRaisesRegex(RevalidationError, "authentication"):
+            start_batch(
+                self.database, self.filters, limit=1,
+                revalidator=FakeRevalidator({
+                    "0": RevalidationError("authentication failed")
+                }),
+            )
         with BatchStore(self.database) as store:
             self.assertIsNone(store.current())
-            states = store.connection.execute("SELECT COUNT(*) FROM job_reviews").fetchone()[0]
-        self.assertEqual(states, 0)
+            count = store.connection.execute(
+                "SELECT COUNT(*) FROM job_reviews"
+            ).fetchone()[0]
+        self.assertEqual(count, 0)
 
     def test_open_batch_persists_and_prevents_a_second_batch(self) -> None:
         self.seed([make_job("1")])
