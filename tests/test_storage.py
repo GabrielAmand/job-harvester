@@ -191,3 +191,18 @@ class StorageTests(unittest.TestCase):
             record = store.list_jobs()[0]
         self.assertEqual(result.updated, 1)
         self.assertEqual(record.job.remote_eligibility, "incompatible")
+
+    def test_source_refresh_does_not_erase_successful_remote_enrichment(self) -> None:
+        original = make_job(source="france_travail", work_mode="remote",
+                            source_work_mode="remote", source_full_remote=False)
+        with JobStore(self.database) as store:
+            store.upsert([original])
+            store.connection.execute(
+                "UPDATE jobs SET work_mode='hybrid', remote_days_per_week=2, "
+                "remote_intensity='limited', remote_enrichment_version=1"
+            )
+            store.connection.commit()
+            store.upsert([original])
+            record = store.list_jobs()[0].job
+        self.assertEqual((record.source_work_mode, record.work_mode), ("remote", "hybrid"))
+        self.assertEqual((record.remote_days_per_week, record.remote_intensity), (2, "limited"))

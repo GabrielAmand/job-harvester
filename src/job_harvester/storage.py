@@ -28,6 +28,15 @@ CREATE TABLE IF NOT EXISTS jobs (
     remote_eligibility TEXT NOT NULL DEFAULT 'unknown',
     description TEXT,
     canonical_url TEXT,
+    source_url TEXT,
+    application_url TEXT,
+    remote_days_per_week INTEGER,
+    onsite_days_per_week INTEGER,
+    remote_intensity TEXT NOT NULL DEFAULT 'unknown',
+    remote_enriched_at TEXT,
+    remote_enrichment_version INTEGER,
+    source_work_mode TEXT,
+    source_full_remote INTEGER,
     UNIQUE (source, external_id)
 )
 """
@@ -84,6 +93,29 @@ class JobStore(AbstractContextManager["JobStore"]):
             self.connection.execute("ALTER TABLE jobs ADD COLUMN description TEXT")
         if "canonical_url" not in columns:
             self.connection.execute("ALTER TABLE jobs ADD COLUMN canonical_url TEXT")
+        additions = (
+            ("source_url", "TEXT"), ("application_url", "TEXT"),
+            ("remote_days_per_week", "INTEGER"), ("onsite_days_per_week", "INTEGER"),
+            ("remote_intensity", "TEXT NOT NULL DEFAULT 'unknown'"),
+            ("remote_enriched_at", "TEXT"), ("remote_enrichment_version", "INTEGER"),
+            ("source_work_mode", "TEXT"), ("source_full_remote", "INTEGER"),
+        )
+        for name, definition in additions:
+            if name not in columns:
+                self.connection.execute(f"ALTER TABLE jobs ADD COLUMN {name} {definition}")
+        self.connection.execute(
+            """UPDATE jobs SET source_url=CASE
+                 WHEN source='france_travail' THEN
+                   'https://candidat.francetravail.fr/offres/recherche/detail/' || external_id
+                 ELSE url END
+               WHERE source_url IS NULL"""
+        )
+        self.connection.execute(
+            "UPDATE jobs SET source_work_mode=work_mode WHERE source_work_mode IS NULL"
+        )
+        self.connection.execute(
+            "UPDATE jobs SET source_full_remote=full_remote WHERE source_full_remote IS NULL"
+        )
         self.connection.commit()
 
     def close(self) -> None:
@@ -101,7 +133,8 @@ class JobStore(AbstractContextManager["JobStore"]):
                 existing = self.connection.execute(
                     """
                     SELECT company, title, location, work_mode, remote_scope,
-                           published_at, url, full_remote, remote_eligibility, description
+                           published_at, url, full_remote, remote_eligibility, description,
+                           source_url, source_work_mode, source_full_remote
                     FROM jobs WHERE source = ? AND external_id = ?
                     """,
                     (job.source, job.external_id),
@@ -118,6 +151,9 @@ class JobStore(AbstractContextManager["JobStore"]):
                     int(job.full_remote),
                     job.remote_eligibility,
                     job.description,
+                    job.source_url or job.url,
+                    job.source_work_mode or job.work_mode,
+                    int(job.full_remote if job.source_full_remote is None else job.source_full_remote),
                 )
                 if existing is None:
                     state = "new"
@@ -132,21 +168,35 @@ class JobStore(AbstractContextManager["JobStore"]):
                     INSERT INTO jobs (
                         source, external_id, company, title, location,
                         work_mode, remote_scope, published_at, url, collected_at, state,
-                        source_key, full_remote, remote_eligibility, description
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        source_key, full_remote, remote_eligibility, description,
+                        source_url, application_url, remote_days_per_week,
+                        onsite_days_per_week, remote_intensity, remote_enriched_at,
+                        remote_enrichment_version
+                        , source_work_mode, source_full_remote
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     ON CONFLICT(source, external_id) DO UPDATE SET
                         company = excluded.company,
                         title = excluded.title,
                         location = excluded.location,
-                        work_mode = excluded.work_mode,
+                        work_mode = CASE WHEN jobs.remote_enrichment_version IS NOT NULL
+                            THEN jobs.work_mode ELSE excluded.work_mode END,
                         remote_scope = excluded.remote_scope,
                         published_at = excluded.published_at,
                         url = excluded.url,
                         state = excluded.state,
                         source_key = COALESCE(excluded.source_key, jobs.source_key),
-                        full_remote = excluded.full_remote,
+                        full_remote = CASE WHEN jobs.remote_enrichment_version IS NOT NULL
+                            THEN jobs.full_remote ELSE excluded.full_remote END,
                         remote_eligibility = excluded.remote_eligibility,
                         description = excluded.description
+                        , source_url = excluded.source_url
+                        , application_url = COALESCE(excluded.application_url, jobs.application_url)
+                        , remote_days_per_week = COALESCE(excluded.remote_days_per_week, jobs.remote_days_per_week)
+                        , onsite_days_per_week = COALESCE(excluded.onsite_days_per_week, jobs.onsite_days_per_week)
+                        , remote_intensity = CASE WHEN excluded.remote_intensity != 'unknown'
+                            THEN excluded.remote_intensity ELSE jobs.remote_intensity END
+                        , source_work_mode = excluded.source_work_mode
+                        , source_full_remote = excluded.source_full_remote
                     """,
                     (
                         job.source,
@@ -164,6 +214,15 @@ class JobStore(AbstractContextManager["JobStore"]):
                         int(job.full_remote),
                         job.remote_eligibility,
                         job.description,
+                        job.source_url or job.url,
+                        job.application_url,
+                        job.remote_days_per_week,
+                        job.onsite_days_per_week,
+                        job.remote_intensity,
+                        _timestamp(job.remote_enriched_at),
+                        job.remote_enrichment_version,
+                        job.source_work_mode or job.work_mode,
+                        int(job.full_remote if job.source_full_remote is None else job.source_full_remote),
                     ),
                 )
         return CollectionResult(new=new_count, updated=updated_count)
@@ -174,7 +233,11 @@ class JobStore(AbstractContextManager["JobStore"]):
             f"""
             SELECT source, external_id, company, title, location, url,
                    work_mode, remote_scope, published_at, collected_at, state,
-                   source_key, full_remote, remote_eligibility, description
+                   source_key, full_remote, remote_eligibility, description,
+                   source_url, application_url, remote_days_per_week,
+                   onsite_days_per_week, remote_intensity, remote_enriched_at,
+                   remote_enrichment_version
+                   , source_work_mode, source_full_remote
             FROM jobs
             {where}
             ORDER BY company COLLATE NOCASE, title COLLATE NOCASE, external_id
@@ -197,6 +260,11 @@ class JobStore(AbstractContextManager["JobStore"]):
                     full_remote=bool(row[12]),
                     remote_eligibility=row[13],
                     description=row[14],
+                    source_url=row[15], application_url=row[16],
+                    remote_days_per_week=row[17], onsite_days_per_week=row[18],
+                    remote_intensity=row[19], remote_enriched_at=_datetime(row[20]),
+                    remote_enrichment_version=row[21],
+                    source_work_mode=row[22], source_full_remote=bool(row[23]),
                 ),
                 state=row[10],
             )

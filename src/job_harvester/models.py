@@ -22,6 +22,15 @@ class Job:
     full_remote: bool = False
     remote_eligibility: str = "unknown"
     description: str | None = None
+    source_url: str | None = None
+    application_url: str | None = None
+    remote_days_per_week: int | None = None
+    onsite_days_per_week: int | None = None
+    remote_intensity: str = "unknown"
+    remote_enriched_at: datetime | None = None
+    remote_enrichment_version: int | None = None
+    source_work_mode: str | None = None
+    source_full_remote: bool | None = None
 
     def discovered_at(self) -> datetime:
         return self.collected_at or utc_now()

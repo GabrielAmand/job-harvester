@@ -185,8 +185,9 @@ class FranceTravailCollector:
         location = location_data.get("libelle") if isinstance(location_data, dict) else None
         origin = raw.get("origineOffre")
         url = origin.get("urlOrigine") if isinstance(origin, dict) else None
+        source_url = f"https://candidat.francetravail.fr/offres/recherche/detail/{offer_id.strip()}"
         if not isinstance(url, str) or not url.startswith(("https://", "http://")):
-            url = f"https://candidat.francetravail.fr/offres/recherche/detail/{offer_id.strip()}"
+            url = source_url
         published_at = self._published_at(raw.get("dateCreation"), offer_id)
         work_mode, remote_scope, full_remote, remote_eligibility = classify_france_travail_work_mode(raw)
         return Job(
@@ -206,6 +207,9 @@ class FranceTravailCollector:
                 if isinstance(raw.get("description"), str) and raw["description"].strip()
                 else None
             ),
+            source_url=source_url,
+            source_work_mode=work_mode,
+            source_full_remote=full_remote,
         )
 
     @staticmethod

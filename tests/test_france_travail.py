@@ -71,6 +71,8 @@ class FranceTravailTests(unittest.TestCase):
         self.assertEqual(first.location, "75 - Paris")
         self.assertEqual(first.published_at, datetime(2026, 8, 18, 8, 15, 42, tzinfo=timezone.utc))
         self.assertEqual((first.work_mode, first.remote_scope), ("hybrid", "france"))
+        self.assertEqual(first.source_url,
+            "https://candidat.francetravail.fr/offres/recherche/detail/201ABCD")
         self.assertEqual(second.company, "Entreprise non précisée")
         self.assertEqual((second.work_mode, second.remote_scope), ("onsite", "unknown"))
         self.assertEqual(

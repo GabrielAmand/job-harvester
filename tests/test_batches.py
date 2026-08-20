@@ -1,3 +1,4 @@
+from dataclasses import replace
 from datetime import datetime, timezone
 from pathlib import Path
 import sqlite3
@@ -9,6 +10,7 @@ from job_harvester.config import Filters
 from job_harvester.models import Job
 from job_harvester.revalidation import CandidateRevalidationError, RevalidationError
 from job_harvester.storage import JobStore
+from job_harvester.france_travail_enrichment import ENRICHMENT_VERSION
 
 
 def make_job(identity: str, mode: str = "unknown", *, source: str = "greenhouse",
@@ -64,6 +66,24 @@ class BatchTests(unittest.TestCase):
         result = start_batch(self.database, self.filters, limit=3, revalidator=checker)
         self.assertEqual(checker.seen, ["remote-new", "remote-old", "hybrid"])
         self.assertEqual([e.job.external_id for e in result.entries], checker.seen)
+
+    def test_france_travail_limited_remote_ranks_below_full_remote(self) -> None:
+        ft = make_job("ft", "remote", source="france_travail")
+        full = make_job("full", "remote", full_remote=True, scope="france")
+        self.seed([ft, full])
+        class Enricher:
+            def enrich(self, candidate):
+                return replace(candidate, application_url="https://apply.example/ft",
+                    remote_days_per_week=2, remote_intensity="limited",
+                    work_mode="hybrid", full_remote=False,
+                    remote_enriched_at=datetime.now(timezone.utc),
+                    remote_enrichment_version=ENRICHMENT_VERSION)
+        checker = FakeRevalidator()
+        result = start_batch(self.database, self.filters, limit=2, revalidator=checker,
+                             france_travail_enricher=Enricher())
+        self.assertEqual([entry.job.external_id for entry in result.entries], ["full", "ft"])
+        self.assertEqual(result.entries[1].job.source_url, ft.url)
+        self.assertEqual(result.entries[1].job.application_url, "https://apply.example/ft")
 
     def test_full_remote_and_scope_priority_categories(self) -> None:
         jobs = [

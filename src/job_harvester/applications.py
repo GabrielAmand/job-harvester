@@ -303,7 +303,9 @@ class ApplicationStore(AbstractContextManager["ApplicationStore"]):
         now = _timestamp(datetime.now(timezone.utc))
         row = self.connection.execute(
             """
-            SELECT j.url, e.career_ops_tracker_id, e.career_ops_report_path,
+            SELECT CASE WHEN j.source='france_travail'
+                        THEN COALESCE(j.application_url, j.url) ELSE j.url END,
+                   e.career_ops_tracker_id, e.career_ops_report_path,
                    e.career_ops_cv_pdf_path, e.career_ops_score,
                    e.career_ops_category, j.source, j.company, j.title
             FROM jobs j JOIN career_ops_evaluations e ON e.job_id=j.id
@@ -332,7 +334,9 @@ class ApplicationStore(AbstractContextManager["ApplicationStore"]):
             """
             SELECT source, external_id, company, title, location, url, work_mode,
                    remote_scope, published_at, collected_at, source_key,
-                   full_remote, remote_eligibility FROM jobs WHERE id=?
+                   full_remote, remote_eligibility, source_url, application_url,
+                   remote_days_per_week, onsite_days_per_week, remote_intensity,
+                   remote_enriched_at, remote_enrichment_version FROM jobs WHERE id=?
             """,
             (job_id,),
         ).fetchone()
@@ -343,6 +347,10 @@ class ApplicationStore(AbstractContextManager["ApplicationStore"]):
             location=row[4], url=row[5], work_mode=row[6], remote_scope=row[7],
             published_at=_datetime(row[8]), collected_at=_datetime(row[9]),
             source_key=row[10], full_remote=bool(row[11]), remote_eligibility=row[12],
+            source_url=row[13], application_url=row[14],
+            remote_days_per_week=row[15], onsite_days_per_week=row[16],
+            remote_intensity=row[17], remote_enriched_at=_datetime(row[18]),
+            remote_enrichment_version=row[19],
         )
 
     def _transition(self, job_id: int, target: str, reason: str | None) -> None:
@@ -375,7 +383,8 @@ class ApplicationStore(AbstractContextManager["ApplicationStore"]):
 
 
 _APPLICATION_QUERY = """
-SELECT j.id, a.state, a.decision, j.company, j.title, j.source, j.url,
+SELECT j.id, a.state, a.decision, j.company, j.title, j.source,
+       CASE WHEN j.source='france_travail' THEN COALESCE(j.application_url, j.url) ELSE j.url END,
        e.career_ops_score, e.career_ops_category, e.career_ops_recommendation,
        e.career_ops_tracker_id,
        e.career_ops_report_path, e.career_ops_cv_pdf_path, a.state_reason,

@@ -314,6 +314,34 @@ class ApplicationTests(unittest.TestCase):
         self.assertIn("CV not ready.", output.getvalue())
         self.assertIn("Deferred: 1", output.getvalue())
 
+    def test_france_travail_session_prefers_application_url(self) -> None:
+        source = "https://candidat.francetravail.fr/offres/recherche/detail/123ABCD"
+        application = "https://apply.example/jobs/123"
+        with JobStore(self.database) as store:
+            store.upsert([Job("france_travail", "123ABCD", "Acme",
+                "Platform Engineer", "Paris", source, source_url=source,
+                application_url=application)])
+            job_id = int(store.connection.execute(
+                "SELECT id FROM jobs WHERE external_id='123ABCD'"
+            ).fetchone()[0])
+        self.evaluate(job_id, "review")
+        synchronize_evaluation(self.database, self.config, job_id)
+        opened = []
+        copied = []
+        actions = iter(("o", "u", "q"))
+        application_session.run_session(
+            self.database, self.config, input_fn=lambda prompt: next(actions),
+            output=io.StringIO(), opener=lambda target: opened.append(str(target)) or True,
+            copier=lambda value: copied.append(value) or True,
+        )
+        self.assertEqual(opened, [application])
+        self.assertEqual(copied, [application])
+        with JobStore(self.database) as store:
+            row = store.connection.execute(
+                "SELECT source_url, application_url FROM jobs WHERE id=?", (job_id,)
+            ).fetchone()
+        self.assertEqual(row, (source, application))
+
     def test_needs_review_apply_prepares_without_marking_applied(self) -> None:
         job_id = self.add_job()
         self.evaluate(job_id, "review")

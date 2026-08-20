@@ -8,6 +8,9 @@ import sqlite3
 
 from job_harvester.config import Filters
 from job_harvester.filters import is_relevant, seniority_category
+from job_harvester.france_travail_enrichment import (
+    ENRICHMENT_VERSION, FranceTravailEnricher,
+)
 from job_harvester.models import Job
 from job_harvester.revalidation import CandidateRevalidationError, JobRevalidator
 from job_harvester.storage import JobStore, _datetime, _timestamp
@@ -168,6 +171,9 @@ class BatchStore(AbstractContextManager["BatchStore"]):
                    j.location, j.url, j.work_mode, j.remote_scope,
                    j.published_at, j.collected_at, j.source_key, j.full_remote,
                    j.remote_eligibility,
+                   j.source_url, j.application_url, j.remote_days_per_week,
+                   j.onsite_days_per_week, j.remote_intensity,
+                   j.remote_enriched_at, j.remote_enrichment_version,
                    COALESCE(r.review_state, 'pending'), r.decision
             FROM batch_jobs bj
             JOIN jobs j ON j.id = bj.job_id
@@ -186,8 +192,12 @@ class BatchStore(AbstractContextManager["BatchStore"]):
                     collected_at=_datetime(row[10]), source_key=row[11],
                     full_remote=bool(row[12]),
                     remote_eligibility=row[13],
+                    source_url=row[14], application_url=row[15],
+                    remote_days_per_week=row[16], onsite_days_per_week=row[17],
+                    remote_intensity=row[18], remote_enriched_at=_datetime(row[19]),
+                    remote_enrichment_version=row[20],
                 ),
-                review_state=row[14], decision=row[15],
+                review_state=row[21], decision=row[22],
             )
             for row in rows
         ]
@@ -341,6 +351,7 @@ def start_batch(
     *,
     limit: int = 20,
     revalidator: JobRevalidator | None = None,
+    france_travail_enricher: FranceTravailEnricher | None = None,
 ) -> BatchStartResult:
     if limit <= 0:
         raise BatchError("batch limit must be greater than zero")
@@ -355,6 +366,20 @@ def start_batch(
             and is_relevant(record.job, filters)
         ]
     candidates.sort(key=_candidate_key)
+    enricher = france_travail_enricher or FranceTravailEnricher()
+    enrichment_window = max(limit * 3, 20)
+    enriched: list[Job] = []
+    for index, job in enumerate(candidates):
+        if (index < enrichment_window and job.source == "france_travail"
+                and job.remote_enrichment_version != ENRICHMENT_VERSION):
+            try:
+                job = enricher.enrich(job)
+                _persist_enrichment(path, job)
+            except Exception:
+                # Optional candidate metadata must never abort batch creation.
+                pass
+        enriched.append(job)
+    candidates = sorted(enriched, key=_candidate_key)
     checker = revalidator or JobRevalidator()
     selected: list[Job] = []
     expired: list[Job] = []
@@ -413,6 +438,16 @@ def _priority_category(job: Job) -> tuple[int, str]:
     scope = job.remote_scope if job.remote_scope in {
         "france", "europe", "worldwide", "unknown", "restricted"
     } else "unknown"
+    if job.remote_intensity == "mostly_remote":
+        return 5, "mostly_remote"
+    if job.remote_intensity == "balanced":
+        return 9, "balanced_hybrid"
+    if job.remote_intensity == "limited":
+        return 10, "limited_remote"
+    if job.remote_intensity == "occasional":
+        return 11, "occasional_remote"
+    if job.remote_intensity == "onsite":
+        return 12, "onsite"
     if job.work_mode == "remote":
         if job.full_remote and scope != "restricted":
             ranks = {"france": 1, "europe": 2, "worldwide": 3, "unknown": 4}
@@ -427,6 +462,22 @@ def _priority_category(job: Job) -> tuple[int, str]:
     if job.work_mode == "onsite":
         return 12, "onsite"
     return 11, "unknown"
+
+
+def _persist_enrichment(path: str | Path, job: Job) -> None:
+    with JobStore(path) as store, store.connection:
+        store.connection.execute(
+            """
+            UPDATE jobs SET source_url=?, application_url=?, remote_days_per_week=?,
+                onsite_days_per_week=?, remote_intensity=?, work_mode=?, full_remote=?,
+                remote_enriched_at=?, remote_enrichment_version=?
+            WHERE source=? AND external_id=?
+            """,
+            (job.source_url, job.application_url, job.remote_days_per_week,
+             job.onsite_days_per_week, job.remote_intensity, job.work_mode,
+             int(job.full_remote), _timestamp(job.remote_enriched_at),
+             job.remote_enrichment_version, job.source, job.external_id),
+        )
 
 
 def _batch(row: tuple[object, ...]) -> Batch:
